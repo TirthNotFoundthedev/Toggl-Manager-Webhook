@@ -57,6 +57,21 @@ def edit_message(chat_id, message_id, text):
     except requests.exceptions.RequestException as e:
         print(f"Failed to edit message: {e}")
 
+def delete_message(chat_id, message_id):
+    if not BOT_TOKEN:
+        return
+
+    url = f"{BASE_URL}/deleteMessage"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to delete message: {e}")
+
 @functions_framework.http
 def telegram_webhook(request):
     """HTTP Cloud Function."""
@@ -150,9 +165,8 @@ def telegram_webhook(request):
                                 if not found:
                                     final_msg = f"User '{target_name}' not found."
                                     if loading_msg_id:
-                                        edit_message(chat_id, loading_msg_id, final_msg)
-                                    else:
-                                        send_message(chat_id, final_msg, reply_to_message_id=incoming_message_id)
+                                        delete_message(chat_id, loading_msg_id)
+                                    send_message(chat_id, final_msg, reply_to_message_id=incoming_message_id)
                                     return jsonify({"status": "ok"})
 
                             if status_messages:
@@ -164,17 +178,16 @@ def telegram_webhook(request):
                                 final_message = "Status check complete." # Fallback
 
                             if loading_msg_id:
-                                edit_message(chat_id, loading_msg_id, final_message)
-                            else:
-                                send_message(chat_id, final_message, reply_to_message_id=incoming_message_id)
+                                delete_message(chat_id, loading_msg_id)
+                            
+                            send_message(chat_id, final_message, reply_to_message_id=incoming_message_id)
 
                         except Exception as e:
                             print(f"Error processing /status: {e}")
                             error_msg = "An error occurred while checking status."
                             if loading_msg_id:
-                                edit_message(chat_id, loading_msg_id, error_msg)
-                            else:
-                                send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
+                                delete_message(chat_id, loading_msg_id)
+                            send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
 
                 elif command == "/today":
                     if not supabase:
@@ -222,9 +235,8 @@ def telegram_webhook(request):
                             if not target_user:
                                 msg = f"User '{target_name}' not found." if target_name else "You are not registered in the database."
                                 if loading_msg_id:
-                                    edit_message(chat_id, loading_msg_id, msg)
-                                else:
-                                    send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
+                                    delete_message(chat_id, loading_msg_id)
+                                send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
                             else:
                                 # Found user, generate report
                                 api_token = target_user.get('toggl_token')
@@ -233,26 +245,23 @@ def telegram_webhook(request):
                                 if not api_token:
                                     msg = f"⚠️ {user_name} has no Toggl token configured."
                                     if loading_msg_id:
-                                        edit_message(chat_id, loading_msg_id, msg)
-                                    else:
-                                        send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
+                                        delete_message(chat_id, loading_msg_id)
+                                    send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
                                 else:
                                     # Generate Report
                                     # Defaulting to Asia/Kolkata as requested/implied by context
                                     report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed)
                                     
                                     if loading_msg_id:
-                                        edit_message(chat_id, loading_msg_id, report)
-                                    else:
-                                        send_message(chat_id, report, reply_to_message_id=incoming_message_id)
+                                        delete_message(chat_id, loading_msg_id)
+                                    send_message(chat_id, report, reply_to_message_id=incoming_message_id)
 
                         except Exception as e:
                             print(f"Error processing /today: {e}")
                             error_msg = "An error occurred while fetching the report."
                             if loading_msg_id:
-                                edit_message(chat_id, loading_msg_id, error_msg)
-                            else:
-                                send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
+                                delete_message(chat_id, loading_msg_id)
+                            send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
 
         return jsonify({"status": "ok"})
     
