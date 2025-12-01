@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from toggl_api.client import get_user_status_string, get_daily_report, get_leaderboard_report
 import json
+from datetime import datetime, timedelta
+import pytz
 
 load_dotenv()
 
@@ -117,19 +119,53 @@ def get_report_keyboard(user_name, current_view):
         return {"inline_keyboard": [[{"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal"}]]}
 
 def get_leaderboard_keyboard(period, offset):
-    """Generates navigation buttons for leaderboard."""
-    # Logic:
-    # Prev: offset - 1
-    # Next: offset + 1
-    # Toggle: Switch period, reset offset to 0
+    """Generates navigation buttons for leaderboard with smart context switching."""
     
-    toggle_text = "Switch to Weekly 📅" if period == 'daily' else "Switch to Daily 📅"
-    toggle_period = 'weekly' if period == 'daily' else 'daily'
+    # Logic for Toggle:
+    # Daily -> Weekly: Find the week containing the current daily date.
+    # Weekly -> Daily: Find the Monday of the current week.
+    
+    timezone_str = 'Asia/Kolkata'
+    tz = pytz.timezone(timezone_str)
+    # Normalize 'now' to midnight to ensure consistent day math
+    now = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if period == 'daily':
+        # Switching TO Weekly
+        # 1. Determine the specific date we are currently looking at
+        focus_date = now + timedelta(days=offset)
+        
+        # 2. Determine the Monday of the week that date falls in
+        focus_week_start = focus_date - timedelta(days=focus_date.weekday())
+        
+        # 3. Determine the Monday of the "Current" real-world week
+        current_real_week_start = now - timedelta(days=now.weekday())
+        
+        # 4. Calculate difference in weeks
+        # (Target Monday - Current Monday) / 7 days
+        new_offset = (focus_week_start - current_real_week_start).days // 7
+        
+        toggle_text = "Switch to Weekly 📅"
+        toggle_period = 'weekly'
+        
+    else: # period == 'weekly'
+        # Switching TO Daily
+        # 1. Determine the Monday of the week we are looking at
+        # Start with current real week Monday
+        current_real_week_start = now - timedelta(days=now.weekday())
+        # Apply offset
+        focus_week_start = current_real_week_start + timedelta(weeks=offset)
+        
+        # 2. Calculate difference in days between that Monday and "Now"
+        new_offset = (focus_week_start - now).days
+        
+        toggle_text = "Switch to Daily 📅"
+        toggle_period = 'daily'
     
     keyboard = [
         [
             {"text": "⬅️ Prev", "callback_data": f"lb:{period}:{offset-1}"},
-            {"text": toggle_text, "callback_data": f"lb:{toggle_period}:0"},
+            {"text": toggle_text, "callback_data": f"lb:{toggle_period}:{new_offset}"},
             {"text": "Next ➡️", "callback_data": f"lb:{period}:{offset+1}"}
         ]
     ]
