@@ -311,6 +311,9 @@ def telegram_webhook(request):
 
 def handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=False, reply_to_id=None):
     try:
+        if is_edit:
+            edit_message(chat_id, message_id, "⏳ Updating...")
+            
         response = supabase.table('Users').select("*").execute()
         users = response.data
         
@@ -404,6 +407,9 @@ def handle_status_request(chat_id, target_name, sender_id, loading_msg_id):
 
 def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, is_edit=False):
     try:
+        if is_edit:
+            edit_message(chat_id, message_id, "⏳ Updating...")
+            
         response = supabase.table('Users').select("*").execute()
         users = response.data
         
