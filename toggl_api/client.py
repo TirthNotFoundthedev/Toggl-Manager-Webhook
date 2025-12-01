@@ -196,6 +196,10 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
 
         return msg
 
+    except Exception as e:
+        print(f"Report Error: {e}")
+        return f"Failed to generate report for {user_name}."
+
 def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/Kolkata'):
     """
     Generates a leaderboard report for the given period and offset.
@@ -261,9 +265,7 @@ def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/K
         for idx, data in enumerate(leaderboard_data, 1):
             rank_str = f"{idx}."
             trophy = " 🏆" if idx == 1 else ""
-            dur_str = format_duration(data['duration']).replace('`', '') # Remove backticks for cleaner leaderboard look or keep them? Example showed plain text.
-            # Actually example showed "1. 🏆 Tirth: 4:52:51". Plain text seems preferred or maybe backticks ok.
-            # Let's stick to plain text for the leaderboard duration to match example exactly.
+            dur_str = format_duration(data['duration']).replace('`', '') # Remove backticks for cleaner leaderboard look
             
             msg += f"{rank_str}{trophy} {data['name']}: {dur_str}\n"
             
@@ -272,7 +274,3 @@ def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/K
     except Exception as e:
         print(f"Leaderboard Error: {e}")
         return "Failed to generate leaderboard."
-
-    except Exception as e:
-        print(f"Report Error: {e}")
-        return f"Failed to generate report for {user_name}."
