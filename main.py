@@ -116,6 +116,25 @@ def get_report_keyboard(user_name, current_view):
     else:
         return {"inline_keyboard": [[{"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal"}]]}
 
+def get_leaderboard_keyboard(period, offset):
+    """Generates navigation buttons for leaderboard."""
+    # Logic:
+    # Prev: offset - 1
+    # Next: offset + 1
+    # Toggle: Switch period, reset offset to 0
+    
+    toggle_text = "Switch to Weekly 📅" if period == 'daily' else "Switch to Daily 📅"
+    toggle_period = 'weekly' if period == 'daily' else 'daily'
+    
+    keyboard = [
+        [
+            {"text": "⬅️ Prev", "callback_data": f"lb:{period}:{offset-1}"},
+            {"text": toggle_text, "callback_data": f"lb:{toggle_period}:0"},
+            {"text": "Next ➡️", "callback_data": f"lb:{period}:{offset+1}"}
+        ]
+    ]
+    return {"inline_keyboard": keyboard}
+
 @functions_framework.http
 def telegram_webhook(request):
     """HTTP Cloud Function."""
@@ -146,12 +165,10 @@ def telegram_webhook(request):
                 loading_msg = send_message(chat_id, f"⏳ Fetching {cmd_type} for {target}...")
                 loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
                 
-                # Execute Logic (Reusing the logic is hard without refactoring, so we duplicate slightly for now but keep it clean)
+                # Execute Logic
                 if cmd_type == "status":
-                    # STATUS LOGIC
                     handle_status_request(chat_id, target, sender_id, loading_msg_id)
                 elif cmd_type == "today":
-                     # TODAY LOGIC
                     handle_today_request(chat_id, target, False, sender_id, loading_msg_id)
 
             elif callback_data.startswith("view:"):
@@ -159,8 +176,20 @@ def telegram_webhook(request):
                 _, cmd_type, target, view_mode = callback_data.split(":")
                 detailed = (view_mode == "detailed")
                 
-                # Edit directly, no delete/send new
+                # Edit directly
                 handle_today_request(chat_id, target, detailed, sender_id, message_id, is_edit=True)
+
+            elif callback_data.startswith("lb:"):
+                # Format: lb:daily:-1
+                parts = callback_data.split(":")
+                period = parts[1]
+                try:
+                    offset = int(parts[2])
+                except:
+                    offset = 0
+                
+                # Edit leaderboard directly (navigation)
+                handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=True)
 
             return jsonify({"status": "ok"})
 
@@ -181,6 +210,7 @@ def telegram_webhook(request):
                     send_message(chat_id, "Hello! I am your Google Cloud Function Telegram bot.", reply_to_message_id=incoming_message_id)
                 
                 elif command == "/users":
+                    # ... (existing /users logic same as before) ...
                     if not supabase:
                         send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
                     else:
@@ -201,18 +231,16 @@ def telegram_webhook(request):
                             send_message(chat_id, f"Failed to fetch users: {str(e)}", reply_to_message_id=incoming_message_id)
 
                 elif command == "/status":
+                    # ... (existing /status logic) ...
                     if not supabase:
                         send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
                     else:
-                        # Check arguments
                         if len(parts) > 1:
-                            # Specific target
                             target_name = parts[1].lower()
                             loading_msg = send_message(chat_id, f"⏳ Processing status for {target_name}...", reply_to_message_id=incoming_message_id)
                             loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
                             handle_status_request(chat_id, target_name, sender_id, loading_msg_id)
                         else:
-                            # Show Menu
                             try:
                                 response = supabase.table('Users').select("*").execute()
                                 users = response.data
@@ -222,28 +250,24 @@ def telegram_webhook(request):
                                 send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
 
                 elif command == "/today":
+                    # ... (existing /today logic) ...
                     if not supabase:
                         send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
                     else:
-                        # Parse args for detailed flag or name
                         args = parts[1:]
                         detailed = False
                         target_name = None
-                        
                         if "detailed" in [a.lower() for a in args]:
                             detailed = True
                             args = [a for a in args if a.lower() != "detailed"]
-                        
                         if args:
                             target_name = args[0].lower()
                         
                         if target_name:
-                             # Specific target
                             loading_msg = send_message(chat_id, f"⏳ Processing report for {target_name}...", reply_to_message_id=incoming_message_id)
                             loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
                             handle_today_request(chat_id, target_name, detailed, sender_id, loading_msg_id)
                         else:
-                            # Show Menu
                             try:
                                 response = supabase.table('Users').select("*").execute()
                                 users = response.data
@@ -251,6 +275,7 @@ def telegram_webhook(request):
                                 send_message(chat_id, "Select user for daily report:", reply_to_message_id=incoming_message_id, reply_markup=keyboard)
                             except Exception as e:
                                 send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
+
                 elif command in ["/lb", "/leaderboard"]:
                     if not supabase:
                         send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
@@ -259,49 +284,69 @@ def telegram_webhook(request):
                         loading_msg = send_message(chat_id, "⏳ Generating leaderboard...", reply_to_message_id=incoming_message_id)
                         loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
                         
-                        try:
-                            # Parse arguments
-                            args = parts[1:]
-                            period = 'daily'
-                            offset = 0
-                            
-                            for arg in args:
-                                arg_lower = arg.lower()
-                                if arg_lower in ['daily', 'd']:
-                                    period = 'daily'
-                                elif arg_lower in ['weekly', 'w']:
-                                    period = 'weekly'
-                                else:
-                                    try:
-                                        offset = int(arg)
-                                    except ValueError:
-                                        pass # Ignore unknown args
-                            
-                            response = supabase.table('Users').select("*").execute()
-                            users = response.data
-                            
-                            if not users:
-                                msg = "No users found in database."
-                                if loading_msg_id:
-                                    delete_message(chat_id, loading_msg_id)
-                                send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
+                        # Parse arguments (Daily/Weekly, offset)
+                        args = parts[1:]
+                        period = 'daily'
+                        offset = 0
+                        for arg in args:
+                            arg_lower = arg.lower()
+                            if arg_lower in ['daily', 'd']:
+                                period = 'daily'
+                            elif arg_lower in ['weekly', 'w']:
+                                period = 'weekly'
                             else:
-                                report = get_leaderboard_report(users, period=period, offset=offset, timezone_str='Asia/Kolkata')
-                                
-                                if loading_msg_id:
-                                    delete_message(chat_id, loading_msg_id)
-                                send_message(chat_id, report, reply_to_message_id=incoming_message_id)
-                                
-                        except Exception as e:
-                            print(f"Error processing /lb: {e}")
-                            error_msg = "An error occurred while generating the leaderboard."
-                            if loading_msg_id:
-                                delete_message(chat_id, loading_msg_id)
-                            send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
+                                try:
+                                    offset = int(arg)
+                                except ValueError:
+                                    pass
+
+                        # Use new handler function
+                        handle_leaderboard_request(chat_id, period, offset, loading_msg_id, is_edit=False, reply_to_id=incoming_message_id)
 
         return jsonify({"status": "ok"})
     
     return "Telegram Bot Webhook is active!"
+
+# ... (handle_status_request and handle_today_request stay here) ...
+
+def handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=False, reply_to_id=None):
+    try:
+        response = supabase.table('Users').select("*").execute()
+        users = response.data
+        
+        if not users:
+            msg = "No users found in database."
+            if is_edit:
+                # Can't delete/resend nicely here without context, just edit text
+                 edit_message(chat_id, message_id, msg)
+            else:
+                if message_id: delete_message(chat_id, message_id)
+                send_message(chat_id, msg, reply_to_message_id=reply_to_id)
+            return
+
+        # Generate Report
+        report = get_leaderboard_report(users, period=period, offset=offset, timezone_str='Asia/Kolkata')
+        
+        # Generate Navigation Keyboard
+        keyboard = get_leaderboard_keyboard(period, offset)
+        
+        if is_edit:
+            edit_message(chat_id, message_id, report, reply_markup=keyboard)
+        else:
+            if message_id: delete_message(chat_id, message_id)
+            send_message(chat_id, report, reply_to_message_id=reply_to_id, reply_markup=keyboard)
+
+    except Exception as e:
+        print(f"Leaderboard Error: {e}")
+        error_msg = "An error occurred while generating the leaderboard."
+        if is_edit:
+            # Try to show error in existing message
+            # edit_message(chat_id, message_id, error_msg) # Optional
+            pass
+        else:
+            if message_id: delete_message(chat_id, message_id)
+            send_message(chat_id, error_msg, reply_to_message_id=reply_to_id)
+
 
 # Helper Functions for Logic (Moved out of webhook for cleaner reuse)
 
