@@ -47,22 +47,26 @@ def format_duration(seconds):
     h, m = divmod(m, 60)
     return f"`{int(h)}:{int(m):02d}:{int(s):02d}`"
 
-def get_project_name(project_id, workspace_id, api_token, project_cache=None):
+def get_project_details(project_id, workspace_id, api_token):
     """
-    Fetches project name. optionally uses a cache dict.
-    Note: In a real optimized app, we'd fetch all projects once or cache them properly.
-    For now, we might just return ID or try to fetch if critical, but to save API calls 
-    in this simple bot, we might skip or assume cache is passed.
-    For this implementation, we'll return 'No Project' or simple lookup if feasible.
+    Fetches project details to get the name.
     """
-    # Implementation complexity: fetching project requires another API call per project ID.
-    # To keep it fast, we might skip or simple-cache.
     if not project_id:
         return "No Project"
-    
-    # If we really want names, we'd need to fetch project details:
-    # GET https://api.track.toggl.com/api/v9/workspaces/{workspace_id}/projects/{project_id}
-    return "Project" # Placeholder to avoid N+1 API calls for now unless requested.
+        
+    url = f"https://api.track.toggl.com/api/v9/workspaces/{workspace_id}/projects/{project_id}"
+    try:
+        response = requests.get(
+            url, 
+            auth=HTTPBasicAuth(api_token, "api_token"),
+            timeout=5
+        )
+        if response.status_code == 200:
+            return response.json().get("name", "Unknown Project")
+        return "Unknown Project"
+    except Exception as e:
+        print(f"Project Fetch Error: {e}")
+        return "Unknown Project"
 
 def get_user_status_string(user_name, api_token):
     """
@@ -72,8 +76,17 @@ def get_user_status_string(user_name, api_token):
     
     if entry and entry.get('id'):
         # User is tracking time
-        description = entry.get('description', 'something')
-        return f"🟢 {user_name} is currently tracking: {description}"
+        description = entry.get('description', '(No Description)')
+        
+        # Fetch project name for status
+        pid = entry.get('pid')
+        wid = entry.get('wid')
+        project_name = ""
+        if pid:
+             name = get_project_details(pid, wid, api_token)
+             project_name = f"[{name}] "
+             
+        return f"🟢 {user_name} is currently tracking: {project_name}{description}"
     else:
         # User is not tracking time
         return f"🔴 {user_name} is currently NOT tracking time."
@@ -98,39 +111,43 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
             return f"📅 No time entries found for {user_name} on {now.strftime('%Y-%m-%d')}."
 
         total_seconds = 0
-        project_totals = {} # map project_id/name -> seconds
         
-        # For grouping
-        grouped_entries = {} # (description, project_id) -> duration
+        # Pre-fetch project names to minimize API calls
+        # Identify unique PIDs
+        unique_pids = set()
+        pid_workspace_map = {} # pid -> wid
+        for entry in entries:
+            pid = entry.get('pid')
+            if pid:
+                unique_pids.add(pid)
+                pid_workspace_map[pid] = entry.get('wid')
         
-        # For detailed view
+        # Fetch names
+        project_names = {} # pid -> name
+        for pid in unique_pids:
+            project_names[pid] = get_project_details(pid, pid_workspace_map[pid], api_token)
+            
+        project_totals = {} # map Project Name -> seconds
+        grouped_entries = {} # (description, project_name) -> duration
+        
         detailed_lines = []
 
         for entry in entries:
             duration = entry.get('duration', 0)
             if duration < 0:
-                # Currently running timer. duration is -(epoch_start)
-                # Calculate duration until 'now'
-                start_ts = abs(duration)
-                current_ts = datetime.now(pytz.utc).timestamp() # Approx
-                # Better:
-                # start_dt = datetime.fromisoformat(entry['start'].replace('Z', '+00:00'))
-                # duration = (datetime.now(pytz.utc) - start_dt).total_seconds()
-                # keeping it simple: just skip or approx?
-                # Let's treat running timers as 'so far'
+                # Currently running timer
                 import time
-                duration = int(time.time()) + duration # duration is negative timestamp
+                duration = int(time.time()) + duration 
             
             total_seconds += duration
             
             desc = entry.get('description', '(No Description)')
-            pid = entry.get('pid', None) # Project ID
-            # project_name = get_project_name(pid, entry['wid'], api_token) # Skipped for speed
-            project_name = "Project" # Placeholder
+            pid = entry.get('pid')
             
-            # Aggregate for Project Totals (using ID to be safe, but label generic)
-            project_key = "General" # We simplify without project lookup
-            project_totals[project_key] = project_totals.get(project_key, 0) + duration
+            project_name = project_names.get(pid, "No Project") if pid else "No Project"
+            
+            # Aggregate for Project Totals
+            project_totals[project_name] = project_totals.get(project_name, 0) + duration
             
             if detailed:
                 # Parse start/stop
@@ -141,10 +158,11 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
                 stop_str = stop_dt.strftime("%H:%M")
                 dur_str = format_duration(duration)
                 
-                detailed_lines.append(f"• `{start_str}` - `{stop_str}` ({dur_str})\n  📝 {desc}")
+                # Include project name in detailed view too
+                detailed_lines.append(f"• `{start_str}` - `{stop_str}` ({dur_str})\n  📂 {project_name}\n  📝 {desc}")
             else:
-                # Grouping
-                key = (desc, project_key)
+                # Grouping by Description AND Project
+                key = (desc, project_name)
                 grouped_entries[key] = grouped_entries.get(key, 0) + duration
 
         # Build Message
@@ -158,31 +176,16 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
             # Sort grouped entries for consistent output
             for (desc, proj), dur in sorted(grouped_entries.items()):
                 dur_str = format_duration(dur)
-                # Mimic requested format: • Duration — Project \n 📝 Desc
-                msg += f"• {dur_str} — {desc}\n" # proj is always 'General' in current simplified impl
-                if desc != "(No Description)": # Only add description line if it's meaningful
+                msg += f"• {dur_str} — {proj}\n"
+                if desc != "(No Description)":
                     msg += f"  📝 {desc}\n"
-                msg += "\n" # Add a newline for spacing between grouped entries
+                msg += "\n"
 
-        # The example implies grouping by a "Project" like "Question Solving".
-        # Current simplified project_key is "General", let's sum by actual descriptions for totals too.
-        # This part of the example "📊 Project totals:" is a bit tricky given the current API response.
-        # If "Question Solving" is a Project, then we need to fetch project names.
-        # For now, let's sum up by descriptions for "Project totals" to match the example's spirit.
-        
-        # Aggregate descriptions for the "Project totals" section
-        desc_totals = {}
-        for entry in entries:
-            duration = entry.get('duration', 0)
-            if duration < 0: # Running timer
-                duration = int(datetime.now(pytz.utc).timestamp()) + duration
-            desc = entry.get('description', '(No Description)')
-            desc_totals[desc] = desc_totals.get(desc, 0) + duration
-
-        if desc_totals:
-            msg += f"\n📊 Project totals:\n"
-            for desc, dur in sorted(desc_totals.items()):
-                msg += f"- {desc}: {format_duration(dur)}\n"
+        # Project Totals Section
+        if project_totals:
+            msg += f"📊 Project totals:\n"
+            for proj, dur in sorted(project_totals.items()):
+                msg += f"- {proj}: {format_duration(dur)}\n"
         
         msg += f"\n⏱ Day total: {format_duration(total_seconds)}"
 
