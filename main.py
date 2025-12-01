@@ -332,7 +332,7 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
                     rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed)
                     reports.append(rep)
             
-            final_report = "\n" + "="*20 + "\n".join(reports)
+            final_report = ("\n" + "-"*10 + "\n").join(reports)
             if not reports:
                 final_report = "No users to report."
             
