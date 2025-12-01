@@ -107,6 +107,9 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
         
         entries = get_time_entries(api_token, start_iso, end_iso)
         
+        # Sort entries by start time (oldest to newest)
+        entries.sort(key=lambda x: datetime.fromisoformat(x['start'].replace('Z', '+00:00')))
+        
         if not entries:
             return f"📅 No time entries found for {user_name} on {now.strftime('%Y-%m-%d')}."
 
@@ -232,9 +235,8 @@ def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/K
             start_date = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
             end_date = end_of_week.replace(hour=23, minute=59, second=59, microsecond=999999)
             
-            start_str = start_date.strftime('%d/%m/%y')
-            end_str = end_date.strftime('%d/%m/%y')
-            header = f"📊 Weekly leaderboard ({start_str} - {end_str})"
+            week_number = start_date.isocalendar()[1]
+            header = f"📊 Weekly leaderboard (Week {week_number}, {start_date.strftime('%Y')})"
         
         start_iso = start_date.isoformat()
         end_iso = end_date.isoformat()
