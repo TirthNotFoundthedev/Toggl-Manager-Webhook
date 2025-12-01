@@ -159,7 +159,10 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
                 dur_str = format_duration(duration)
                 
                 # Include project name in detailed view too
-                detailed_lines.append(f"• `{start_str}` - `{stop_str}` ({dur_str})\n  📂 {project_name}\n  📝 {desc}")
+                # Changed placement: Description first, then Project
+                detailed_lines.append(f"• `{start_str}` - `{stop_str}` ({dur_str})\n  📝 {desc}")
+                if project_name and project_name != "No Project":
+                    detailed_lines.append(f"  📂 {project_name}")
             else:
                 # Grouping by Description AND Project
                 key = (desc, project_name)
@@ -170,16 +173,18 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
         msg = f"📅 Time entries for {user_name} on {date_str}\n\n"
         
         if detailed:
+            # Join with double newlines for spacing
             msg += "\n\n".join(detailed_lines)
         else:
             # Grouped Output
             # Sort grouped entries for consistent output
             for (desc, proj), dur in sorted(grouped_entries.items()):
                 dur_str = format_duration(dur)
-                msg += f"• {dur_str} — {proj}\n"
-                if desc != "(No Description)":
-                    msg += f"  📝 {desc}\n"
-                msg += "\n"
+                # Changed placement: Description first, then Project
+                msg += f"• {dur_str} — {desc}\n"
+                if proj and proj != "No Project": # Only show project if it's available and not generic
+                    msg += f"  📂 {proj}\n"
+                msg += "\n" # Add a newline for spacing between grouped entries
 
         # Project Totals Section
         if project_totals:
