@@ -1,54 +1,76 @@
 import os
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import functions_framework
+from flask import jsonify
+import requests
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
-    await update.message.reply_text("Hello! I am running on Google Cloud Run.")
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    print("Warning: SUPABASE_URL or SUPABASE_KEY not set.")
 
-def main() -> None:
-    """Start the bot."""
-    # Get the token from environment variable
-    token = os.environ.get("TELEGRAM_TOKEN")
-    if not token:
-        logger.error("TELEGRAM_TOKEN environment variable not set")
+def send_message(chat_id, text):
+    if not BOT_TOKEN:
+        print("Error: TELEGRAM_BOT_TOKEN is not set.")
         return
 
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(token).build()
+    url = f"{BASE_URL}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to send message: {e}")
 
-    # on different commands - answer in Telegram
-    application.add_handler(CommandHandler("start", start))
-
-    # Run the bot using webhook
-    # Cloud Run passes the port to listen on as an environment variable PORT
-    port = int(os.environ.get("PORT", 8080))
-    webhook_url = os.environ.get("WEBHOOK_URL")
+@functions_framework.http
+def telegram_webhook(request):
+    """HTTP Cloud Function."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True)
+        
+        # Check if it's a valid message update
+        if data and "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            
+            if "text" in data["message"]:
+                text = data["message"]["text"].strip()
+                print(f"Received message: {text}")
+                
+                if text.lower() == "hi":
+                    send_message(chat_id, "Hello! I am your Google Cloud Function Telegram bot.")
+                elif text.lower() == "/users":
+                    if not supabase:
+                        send_message(chat_id, "Error: Supabase not configured.")
+                    else:
+                        try:
+                            response = supabase.table('Users').select("*").execute()
+                            users = response.data
+                            if not users:
+                                send_message(chat_id, "No users found.")
+                            else:
+                                # Customize this formatting based on your table structure
+                                message = "Users List:\n"
+                                for user in users:
+                                    # List only user_name as requested
+                                    user_info = f"- {user.get('user_name', 'Unknown User')}"
+                                    message += f"{user_info}\n"
+                                send_message(chat_id, message)
+                        except Exception as e:
+                            print(f"Supabase error: {e}")
+                            send_message(chat_id, f"Failed to fetch users: {str(e)}")
+        
+        return jsonify({"status": "ok"})
     
-    if not webhook_url:
-         logger.error("WEBHOOK_URL environment variable not set")
-         return
-
-    logger.info(f"Starting webhook on port {port}, url: {webhook_url}")
-    
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=token,
-        webhook_url=f"{webhook_url}/{token}",
-        drop_pending_updates=True
-    )
-
-if __name__ == "__main__":
-    main()
+    return "Telegram Bot Webhook is active!"
