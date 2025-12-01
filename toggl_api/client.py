@@ -196,6 +196,83 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
 
         return msg
 
+def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/Kolkata'):
+    """
+    Generates a leaderboard report for the given period and offset.
+    period: 'daily' or 'weekly'
+    offset: integer (0 = current, -1 = previous, etc.)
+    """
+    try:
+        tz = pytz.timezone(timezone_str)
+        now = datetime.now(tz)
+        
+        start_date = None
+        end_date = None
+        header = ""
+        
+        if period == 'daily':
+            target_date = now + timedelta(days=offset)
+            start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            date_str = target_date.strftime('%d/%m/%y')
+            header = f"📊 Daily leaderboard for {date_str}"
+            
+        elif period == 'weekly':
+            # Offset by weeks first
+            target_week_point = now + timedelta(weeks=offset)
+            # Find Monday of that week (0 = Monday)
+            start_of_week = target_week_point - timedelta(days=target_week_point.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            
+            start_date = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = end_of_week.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            start_str = start_date.strftime('%d/%m/%y')
+            end_str = end_date.strftime('%d/%m/%y')
+            header = f"📊 Weekly leaderboard ({start_str} - {end_str})"
+        
+        start_iso = start_date.isoformat()
+        end_iso = end_date.isoformat()
+        
+        leaderboard_data = []
+        
+        for user in users:
+            user_name = user.get('user_name', 'Unknown').capitalize()
+            api_token = user.get('toggl_token')
+            
+            total_seconds = 0
+            if api_token:
+                entries = get_time_entries(api_token, start_iso, end_iso)
+                for entry in entries:
+                    duration = entry.get('duration', 0)
+                    if duration < 0:
+                        import time
+                        duration = int(time.time()) + duration
+                    total_seconds += duration
+            
+            leaderboard_data.append({'name': user_name, 'duration': total_seconds})
+            
+        # Sort by duration desc
+        leaderboard_data.sort(key=lambda x: x['duration'], reverse=True)
+        
+        msg = f"{header}\n\n"
+        
+        for idx, data in enumerate(leaderboard_data, 1):
+            rank_str = f"{idx}."
+            trophy = " 🏆" if idx == 1 else ""
+            dur_str = format_duration(data['duration']).replace('`', '') # Remove backticks for cleaner leaderboard look or keep them? Example showed plain text.
+            # Actually example showed "1. 🏆 Tirth: 4:52:51". Plain text seems preferred or maybe backticks ok.
+            # Let's stick to plain text for the leaderboard duration to match example exactly.
+            
+            msg += f"{rank_str}{trophy} {data['name']}: {dur_str}\n"
+            
+        return msg
+
+    except Exception as e:
+        print(f"Leaderboard Error: {e}")
+        return "Failed to generate leaderboard."
+
     except Exception as e:
         print(f"Report Error: {e}")
         return f"Failed to generate report for {user_name}."

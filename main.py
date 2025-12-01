@@ -4,7 +4,7 @@ from flask import jsonify
 import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from toggl_api.client import get_user_status_string, get_daily_report
+from toggl_api.client import get_user_status_string, get_daily_report, get_leaderboard_report
 import json
 
 load_dotenv()
@@ -251,6 +251,53 @@ def telegram_webhook(request):
                                 send_message(chat_id, "Select user for daily report:", reply_to_message_id=incoming_message_id, reply_markup=keyboard)
                             except Exception as e:
                                 send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
+                elif command in ["/lb", "/leaderboard"]:
+                    if not supabase:
+                        send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
+                    else:
+                        # Send processing message
+                        loading_msg = send_message(chat_id, "⏳ Generating leaderboard...", reply_to_message_id=incoming_message_id)
+                        loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
+                        
+                        try:
+                            # Parse arguments
+                            args = parts[1:]
+                            period = 'daily'
+                            offset = 0
+                            
+                            for arg in args:
+                                arg_lower = arg.lower()
+                                if arg_lower in ['daily', 'd']:
+                                    period = 'daily'
+                                elif arg_lower in ['weekly', 'w']:
+                                    period = 'weekly'
+                                else:
+                                    try:
+                                        offset = int(arg)
+                                    except ValueError:
+                                        pass # Ignore unknown args
+                            
+                            response = supabase.table('Users').select("*").execute()
+                            users = response.data
+                            
+                            if not users:
+                                msg = "No users found in database."
+                                if loading_msg_id:
+                                    delete_message(chat_id, loading_msg_id)
+                                send_message(chat_id, msg, reply_to_message_id=incoming_message_id)
+                            else:
+                                report = get_leaderboard_report(users, period=period, offset=offset, timezone_str='Asia/Kolkata')
+                                
+                                if loading_msg_id:
+                                    delete_message(chat_id, loading_msg_id)
+                                send_message(chat_id, report, reply_to_message_id=incoming_message_id)
+                                
+                        except Exception as e:
+                            print(f"Error processing /lb: {e}")
+                            error_msg = "An error occurred while generating the leaderboard."
+                            if loading_msg_id:
+                                delete_message(chat_id, loading_msg_id)
+                            send_message(chat_id, error_msg, reply_to_message_id=incoming_message_id)
 
         return jsonify({"status": "ok"})
     
