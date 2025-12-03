@@ -5,11 +5,43 @@ import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from toggl_api.client import get_user_status_string, get_daily_report, get_leaderboard_report
+from wake_manager.actions import perform_wake, perform_wake_all, handle_wake_reply
 import json
 from datetime import datetime, timedelta
 import pytz
 
 load_dotenv()
+
+COMMANDS = {
+    "start": {
+        "description": "Start the bot and see available commands.",
+        "usage": "/start"
+    },
+    "help": {
+        "description": "Get help for a specific command.",
+        "usage": "/help [command]"
+    },
+    "status": {
+        "description": "Check if a user (or everyone) is currently tracking time.",
+        "usage": "/status [user]"
+    },
+    "today": {
+        "description": "Get a daily report of time tracked.",
+        "usage": "/today [user] [detailed]"
+    },
+    "leaderboard": {
+        "description": "View the leaderboard for time tracked.",
+        "usage": "/leaderboard [daily/weekly] [offset]"
+    },
+    "users": {
+        "description": "List all configured users.",
+        "usage": "/users"
+    },
+    "wake": {
+        "description": "Nudge a user to start working if they aren't tracking time.",
+        "usage": "/wake [user] [message]"
+    }
+}
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -206,6 +238,21 @@ def telegram_webhook(request):
                     handle_status_request(chat_id, target, sender_id, loading_msg_id)
                 elif cmd_type == "today":
                     handle_today_request(chat_id, target, False, sender_id, loading_msg_id)
+                elif cmd_type == "wake":
+                    # Wake Logic
+                    sender_name = query["from"].get("first_name", "Unknown")
+                    delete_message(chat_id, loading_msg_id) # Remove "Processing..."
+
+                    if target == "all":
+                        # For "All", we typically don't do custom message per user, just run it.
+                        result = perform_wake_all(supabase, sender_id, sender_name, custom_message="", command_msg_id=message_id)
+                        send_message(chat_id, result)
+                    else:
+                        # Ask for custom message via ForceReply
+                        # Format: 🔔 Wake <Target>: ...
+                        prompt = f"🔔 Wake *{target}*: Enter custom message (or . for none):"
+                        force_reply = {"force_reply": True, "input_field_placeholder": "Wake up!"}
+                        send_message(chat_id, prompt, reply_markup=force_reply)
 
             elif callback_data.startswith("view:"):
                 # Format: view:today:Tirth:detailed
@@ -239,11 +286,71 @@ def telegram_webhook(request):
                 text = data["message"]["text"].strip()
                 print(f"Received message: {text}")
                 
+                # Check for Reply to Wake Message
+                reply_to = data["message"].get("reply_to_message")
+                if reply_to:
+                    reply_msg_id = reply_to["message_id"]
+                    sender_name = data["message"].get("from", {}).get("first_name", "Unknown")
+                    
+                    # Check if it's a Custom Message prompt from the bot
+                    reply_text = reply_to.get("text", "")
+                    if reply_text.startswith("🔔 Wake") and ":" in reply_text:
+                        try:
+                            # Extract Target from "🔔 Wake Target: ..."
+                            parts_prompt = reply_text.split(":")
+                            if len(parts_prompt) > 1:
+                                prefix_part = parts_prompt[0] # "🔔 Wake Tirth"
+                                # Remove the known prefix "🔔 Wake " safely
+                                target_name = prefix_part.replace("🔔 Wake ", "", 1).strip()
+                                
+                                custom_message = text
+                                if custom_message == ".":
+                                    custom_message = ""
+                                    
+                                loading_msg = send_message(chat_id, f"🔔 Nudging {target_name}...", reply_to_message_id=incoming_message_id)
+                                loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
+                                
+                                result = perform_wake(supabase, sender_id, sender_name, target_name, custom_message, incoming_message_id)
+                                
+                                if loading_msg_id:
+                                    delete_message(chat_id, loading_msg_id)
+                                send_message(chat_id, result, reply_to_message_id=incoming_message_id)
+                                return jsonify({"status": "ok"})
+                        except Exception as e:
+                            print(f"Error parsing wake prompt: {e}")
+
+                    # Try to handle as wake reply
+                    if handle_wake_reply(supabase, reply_msg_id, text, sender_name):
+                        return jsonify({"status": "ok"}) # Handled, exit
+                
                 parts = text.split()
                 command = parts[0].lower()
                 
-                if command == "hi":
-                    send_message(chat_id, "Hello! I am your Google Cloud Function Telegram bot.", reply_to_message_id=incoming_message_id)
+                if command == "/start":
+                    welcome_text = "👋 *Welcome to the Toggl Status Bot!* \n\nHere are the available commands:\n\n"
+                    for cmd, details in COMMANDS.items():
+                        welcome_text += f"/{cmd} - {details['description']}\n"
+                    welcome_text += "\nType `/help <command>` for more details."
+                    send_message(chat_id, welcome_text, reply_to_message_id=incoming_message_id)
+
+                elif command == "/help":
+                    args = parts[1:]
+                    if not args:
+                        help_text = "📚 *Available Commands:*\n\n"
+                        for cmd, details in COMMANDS.items():
+                            help_text += f"/{cmd} - {details['description']}\n"
+                        help_text += "\nUsage: `/help <command_name>`"
+                        send_message(chat_id, help_text, reply_to_message_id=incoming_message_id)
+                    else:
+                        cmd_name = args[0].replace("/", "").lower()
+                        if cmd_name in COMMANDS:
+                            details = COMMANDS[cmd_name]
+                            detail_text = f"ℹ️ *Help for /{cmd_name}*\n\n"
+                            detail_text += f"📝 *Description:* {details['description']}\n"
+                            detail_text += f"⌨️ *Usage:* `{details['usage']}`"
+                            send_message(chat_id, detail_text, reply_to_message_id=incoming_message_id)
+                        else:
+                            send_message(chat_id, f"❌ Command '/{cmd_name}' not found.", reply_to_message_id=incoming_message_id)
                 
                 elif command == "/users":
                     # ... (existing /users logic same as before) ...
@@ -309,6 +416,39 @@ def telegram_webhook(request):
                                 users = response.data
                                 keyboard = get_user_keyboard(users, "today")
                                 send_message(chat_id, "Select user for daily report:", reply_to_message_id=incoming_message_id, reply_markup=keyboard)
+                            except Exception as e:
+                                send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
+
+                elif command == "/wake":
+                    if not supabase:
+                        send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
+                    else:
+                        # Parse: /wake <name> <custom message...>
+                        args = parts[1:]
+                        if args:
+                            target_name = args[0].lower()
+                            custom_message = " ".join(args[1:]) if len(args) > 1 else ""
+                            
+                            loading_msg = send_message(chat_id, f"🔔 Nudging {target_name}...", reply_to_message_id=incoming_message_id)
+                            loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
+                            
+                            sender_name = data["message"].get("from", {}).get("first_name", "Unknown")
+                            
+                            if target_name == "all":
+                                result = perform_wake_all(supabase, sender_id, sender_name, custom_message, incoming_message_id)
+                            else:
+                                result = perform_wake(supabase, sender_id, sender_name, target_name, custom_message, incoming_message_id)
+                                
+                            if loading_msg_id:
+                                delete_message(chat_id, loading_msg_id)
+                            send_message(chat_id, result, reply_to_message_id=incoming_message_id)
+                        else:
+                            # Show Menu
+                            try:
+                                response = supabase.table('Users').select("*").execute()
+                                users = response.data
+                                keyboard = get_user_keyboard(users, "wake")
+                                send_message(chat_id, "Who needs to wake up? 🔔", reply_to_message_id=incoming_message_id, reply_markup=keyboard)
                             except Exception as e:
                                 send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
 
@@ -379,9 +519,7 @@ def handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=Fals
         print(f"Leaderboard Error: {e}")
         error_msg = "An error occurred while generating the leaderboard."
         if is_edit:
-            # Try to show error in existing message
-            # edit_message(chat_id, message_id, error_msg) # Optional
-            pass
+            edit_message(chat_id, message_id, error_msg)
         else:
             if message_id: delete_message(chat_id, message_id)
             send_message(chat_id, error_msg, reply_to_message_id=reply_to_id)

@@ -1,7 +1,18 @@
 import requests
 from requests.auth import HTTPBasicAuth
+from requests.exceptions import HTTPError
 from datetime import datetime, timedelta
 import pytz
+
+class TogglLimitError(Exception):
+    pass
+
+def check_toggl_response(response):
+    if response.status_code == 429:
+        raise TogglLimitError("⚠️ Toggl API limit reached. Please wait an hour before trying again.")
+    if response.status_code == 402:
+        raise TogglLimitError("⚠️ Toggl account locked (Payment Required).")
+    response.raise_for_status()
 
 def get_current_time_entry(api_token):
     """
@@ -14,8 +25,10 @@ def get_current_time_entry(api_token):
             auth=HTTPBasicAuth(api_token, "api_token"),
             timeout=5
         )
-        response.raise_for_status()
+        check_toggl_response(response)
         return response.json()
+    except TogglLimitError:
+        raise
     except Exception as e:
         print(f"Toggl API Error: {e}")
         return None
@@ -35,8 +48,10 @@ def get_time_entries(api_token, start_date, end_date):
             params=params,
             timeout=10
         )
-        response.raise_for_status()
+        check_toggl_response(response)
         return response.json()
+    except TogglLimitError:
+        raise
     except Exception as e:
         print(f"Toggl API Error (History): {e}")
         return []
@@ -61,9 +76,12 @@ def get_project_details(project_id, workspace_id, api_token):
             auth=HTTPBasicAuth(api_token, "api_token"),
             timeout=5
         )
+        check_toggl_response(response)
         if response.status_code == 200:
             return response.json().get("name", "Unknown Project")
         return "Unknown Project"
+    except TogglLimitError:
+        return "Project (Limit Reached)"
     except Exception as e:
         print(f"Project Fetch Error: {e}")
         return "Unknown Project"
@@ -72,11 +90,28 @@ def get_user_status_string(user_name, api_token):
     """
     Returns a formatted string indicating the user's status.
     """
-    entry = get_current_time_entry(api_token)
-    
+    try:
+        entry = get_current_time_entry(api_token)
+    except TogglLimitError as e:
+        return f"🔴 {user_name}: {str(e)}"
+
     if entry and entry.get('id'):
         # User is tracking time
         description = entry.get('description', '(No Description)')
+        
+        # Calculate duration
+        start_time_str = entry.get('start')
+        current_duration_seconds = 0
+        if start_time_str:
+            try:
+                start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00')) # Ensure timezone awareness
+                current_duration_seconds = int((datetime.now(pytz.utc) - start_dt).total_seconds()) # Assuming start_dt is UTC
+            except ValueError:
+                pass # Handle potential parsing error
+
+        duration_str = ""
+        if current_duration_seconds > 0:
+            duration_str = f" ({format_duration(current_duration_seconds)})"
         
         # Fetch project name for status
         pid = entry.get('pid')
@@ -86,7 +121,7 @@ def get_user_status_string(user_name, api_token):
              name = get_project_details(pid, wid, api_token)
              project_name = f"[{name}] "
              
-        return f"🟢 {user_name} is currently tracking: {project_name}{description}"
+        return f"🟢 {user_name} is currently tracking: {project_name}{description}{duration_str}"
     else:
         # User is not tracking time
         return f"🔴 {user_name} is currently NOT tracking time."
@@ -105,7 +140,10 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
         start_iso = start_of_day.isoformat()
         end_iso = end_of_day.isoformat()
         
-        entries = get_time_entries(api_token, start_iso, end_iso)
+        try:
+            entries = get_time_entries(api_token, start_iso, end_iso)
+        except TogglLimitError as e:
+            return f"⚠️ Could not generate report for {user_name}: {str(e)}"
         
         # Sort entries by start time (oldest to newest)
         entries.sort(key=lambda x: datetime.fromisoformat(x['start'].replace('Z', '+00:00')))
@@ -249,13 +287,20 @@ def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/K
             
             total_seconds = 0
             if api_token:
-                entries = get_time_entries(api_token, start_iso, end_iso)
-                for entry in entries:
-                    duration = entry.get('duration', 0)
-                    if duration < 0:
-                        import time
-                        duration = int(time.time()) + duration
-                    total_seconds += duration
+                try:
+                    entries = get_time_entries(api_token, start_iso, end_iso)
+                    for entry in entries:
+                        duration = entry.get('duration', 0)
+                        if duration < 0:
+                            import time
+                            duration = int(time.time()) + duration
+                        total_seconds += duration
+                except TogglLimitError:
+                    # Fail gracefully for leaderboard?
+                    # Maybe append a special entry or just skip with 0?
+                    # Or return an error for the whole board?
+                    # Let's note it in the name
+                    user_name += " (⚠️ Limit)"
             
             leaderboard_data.append({'name': user_name, 'duration': total_seconds})
             
