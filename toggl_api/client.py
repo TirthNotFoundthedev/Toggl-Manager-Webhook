@@ -82,92 +82,93 @@ def get_project_details(project_id, workspace_id, api_token):
         return "Unknown Project"
     except TogglLimitError:
         return "Project (Limit Reached)"
-        except Exception as e:
-            print(f"Project Fetch Error: {e}")
-            return "Unknown Project"
+    except Exception as e:
+        print(f"Project Fetch Error: {e}")
+        return "Unknown Project"
     
-    def get_last_time_entry(api_token):
-        """
-        Fetches the most recent time entry from the last 5 days.
-        """
-        try:
-            now = datetime.now(pytz.utc)
-            start_date = (now - timedelta(days=5)).isoformat()
-            end_date = now.isoformat()
-            entries = get_time_entries(api_token, start_date, end_date)
-            
-            if not entries:
-                return None
-                
-            # Sort by start time descending to get latest
-            entries.sort(key=lambda x: x['start'], reverse=True)
-            return entries[0]
-        except:
+def get_last_time_entry(api_token):
+    """
+    Fetches the most recent time entry from the last 5 days.
+    """
+    try:
+        now = datetime.now(pytz.utc)
+        start_date = (now - timedelta(days=5)).isoformat()
+        end_date = now.isoformat()
+        entries = get_time_entries(api_token, start_date, end_date)
+        
+        if not entries:
             return None
-    
-    def get_user_status_string(user_name, api_token):
-        """
-        Returns a formatted string indicating the user's status.
-        """
-        try:
-            entry = get_current_time_entry(api_token)
-        except TogglLimitError as e:
-            return f"🔴 {user_name}: {str(e)}"
-                                                                                                                                                                                             
-        if entry and entry.get('id'):
-            # User is tracking time
-            description = entry.get('description', '(No Description)')
             
-            # Calculate duration
-            start_time_str = entry.get('start')
-            current_duration_seconds = 0
-            if start_time_str:
+        # Sort by start time descending to get latest
+        entries.sort(key=lambda x: x['start'], reverse=True)
+        return entries[0]
+    except:
+        return None
+    
+def get_user_status_string(user_name, api_token):
+    """
+    Returns a formatted string indicating the user's status.
+    """
+    try:
+        entry = get_current_time_entry(api_token)
+    except TogglLimitError as e:
+        return f"🔴 {user_name}: {str(e)}"
+                                                                                                                                                                                                 
+    if entry and entry.get('id'):
+        # User is tracking time
+        description = entry.get('description', '(No Description)')
+        
+        # Calculate duration
+        start_time_str = entry.get('start')
+        current_duration_seconds = 0
+        if start_time_str:
+            try:
+                start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00')) # Ensure timezone awareness
+                current_duration_seconds = int((datetime.now(pytz.utc) - start_dt).total_seconds()) # Assuming start_dt is UTC
+            except ValueError:
+                pass # Handle potential parsing error
+
+        duration_str = ""
+        if current_duration_seconds > 0:
+            duration_str = f" ({format_duration(current_duration_seconds)})"
+        
+        # Fetch project name for status
+        pid = entry.get('pid')
+        wid = entry.get('wid')
+        project_name = ""
+        if pid:
+                name = get_project_details(pid, wid, api_token)
+                project_name = f"[{name}] "
+                
+        return f"🟢 {user_name} is currently tracking: {project_name}{description}{duration_str}"
+    else:
+        # User is not tracking time
+        last_entry = get_last_time_entry(api_token)
+        last_seen_str = ""
+        if last_entry:
+            stop_time = last_entry.get('stop')
+            if stop_time:
+                tz = pytz.timezone('Asia/Kolkata')
                 try:
-                    start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00')) # Ensure timezone awareness
-                    current_duration_seconds = int((datetime.now(pytz.utc) - start_dt).total_seconds()) # Assuming start_dt is UTC
-                except ValueError:
-                    pass # Handle potential parsing error
-    
-            duration_str = ""
-            if current_duration_seconds > 0:
-                duration_str = f" ({format_duration(current_duration_seconds)})"
-            
-            # Fetch project name for status
-            pid = entry.get('pid')
-            wid = entry.get('wid')
-            project_name = ""
-            if pid:
-                 name = get_project_details(pid, wid, api_token)
-                 project_name = f"[{name}] "
-                 
-            return f"🟢 {user_name} is currently tracking: {project_name}{description}{duration_str}"
-        else:
-            # User is not tracking time
-            last_entry = get_last_time_entry(api_token)
-            last_seen_str = ""
-            if last_entry:
-                stop_time = last_entry.get('stop')
-                if stop_time:
-                    tz = pytz.timezone('Asia/Kolkata')
-                    try:
-                        stop_dt = datetime.fromisoformat(stop_time.replace('Z', '+00:00')).astimezone(tz)
-                        now_kolkata = datetime.now(tz)
+                    stop_dt = datetime.fromisoformat(stop_time.replace('Z', '+00:00')).astimezone(tz)
+                    now_kolkata = datetime.now(tz)
+                    
+                    time_str = stop_dt.strftime("%I:%M %p")
+                    
+                    if stop_dt.date() == now_kolkata.date():
+                        date_part = "today"
+                    elif stop_dt.date() == (now_kolkata - timedelta(days=1)).date():
+                        date_part = "yesterday"
+                    else:
+                        date_part = stop_dt.strftime("on %d/%m")
                         
-                        time_str = stop_dt.strftime("%I:%M %p")
-                        
-                        if stop_dt.date() == now_kolkata.date():
-                            date_part = "today"
-                        elif stop_dt.date() == (now_kolkata - timedelta(days=1)).date():
-                            date_part = "yesterday"
-                        else:
-                            date_part = stop_dt.strftime("on %d/%m")
-                            
-                        desc = last_entry.get('description', 'No Description')
-                        last_seen_str = f" (Last seen: {date_part} at {time_str} - {desc})"
-                    except Exception as e:
-                        print(f"Date parse error: {e}")
-                        
-            return f"🔴 {user_name} is currently NOT tracking time.{last_seen_str}"
+                    desc = last_entry.get('description', 'No Description')
+                    last_seen_str = f" (Last seen: {date_part} at {time_str} - {desc})"
+                except Exception as e:
+                    print(f"Date parse error: {e}")
+                    
+        return f"🔴 {user_name} is currently NOT tracking time.{last_seen_str}"
+
 def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
     """
     Generates a report for 'today' in the specified timezone.
