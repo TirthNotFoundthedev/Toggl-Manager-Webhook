@@ -1,1 +1,1 @@
-web: functions-framework --target=telegram_webhook --port=$PORT --debug
+web: functions-framework --target=telegram_webhook
