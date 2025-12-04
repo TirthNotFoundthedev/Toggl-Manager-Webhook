@@ -23,15 +23,15 @@ COMMANDS = {
     },
     "status": {
         "description": "Check if a user (or everyone) is currently tracking time.",
-        "usage": "/status [user]"
+        "usage": "/status [user]\nExamples:\n`/status` - Menu\n`/status Tirth` - Check Tirth"
     },
     "today": {
         "description": "Get a daily report of time tracked.",
-        "usage": "/today [user] [detailed]"
+        "usage": "/today [user] [detailed]\nExamples:\n`/today` - Menu\n`/today Tirth` - Report for Tirth\n`/today Tirth detailed` - Detailed report"
     },
     "leaderboard": {
         "description": "View the leaderboard for time tracked.",
-        "usage": "/leaderboard [daily/weekly] [offset]"
+        "usage": "/leaderboard [daily/weekly] [offset]\nExamples:\n`/leaderboard` - Default (Daily)\n`/leaderboard weekly` - This week\n`/leaderboard daily -1` - Yesterday"
     },
     "users": {
         "description": "List all configured users.",
@@ -39,7 +39,7 @@ COMMANDS = {
     },
     "wake": {
         "description": "Nudge a user to start working if they aren't tracking time.",
-        "usage": "/wake [user] [message]"
+        "usage": "/wake [user] [message]\nExamples:\n`/wake` - Menu\n`/wake Tirth` - Wake Tirth\n`/wake Tirth Get back to work!` - Custom msg"
     }
 }
 
@@ -248,11 +248,8 @@ def telegram_webhook(request):
                         result = perform_wake_all(supabase, sender_id, sender_name, custom_message="", command_msg_id=message_id)
                         send_message(chat_id, result)
                     else:
-                        # Ask for custom message via ForceReply
-                        # Format: 🔔 Wake <Target>: ...
-                        prompt = f"🔔 Wake *{target}*: Enter custom message (or . for none):"
-                        force_reply = {"force_reply": True, "input_field_placeholder": "Wake up!"}
-                        send_message(chat_id, prompt, reply_markup=force_reply)
+                        result = perform_wake(supabase, sender_id, sender_name, target, custom_message="", command_msg_id=message_id)
+                        send_message(chat_id, result)
 
             elif callback_data.startswith("view:"):
                 # Format: view:today:Tirth:detailed
@@ -292,39 +289,15 @@ def telegram_webhook(request):
                     reply_msg_id = reply_to["message_id"]
                     sender_name = data["message"].get("from", {}).get("first_name", "Unknown")
                     
-                    # Check if it's a Custom Message prompt from the bot
-                    reply_text = reply_to.get("text", "")
-                    if reply_text.startswith("🔔 Wake") and ":" in reply_text:
-                        try:
-                            # Extract Target from "🔔 Wake Target: ..."
-                            parts_prompt = reply_text.split(":")
-                            if len(parts_prompt) > 1:
-                                prefix_part = parts_prompt[0] # "🔔 Wake Tirth"
-                                # Remove the known prefix "🔔 Wake " safely
-                                target_name = prefix_part.replace("🔔 Wake ", "", 1).strip()
-                                
-                                custom_message = text
-                                if custom_message == ".":
-                                    custom_message = ""
-                                    
-                                loading_msg = send_message(chat_id, f"🔔 Nudging {target_name}...", reply_to_message_id=incoming_message_id)
-                                loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
-                                
-                                result = perform_wake(supabase, sender_id, sender_name, target_name, custom_message, incoming_message_id)
-                                
-                                if loading_msg_id:
-                                    delete_message(chat_id, loading_msg_id)
-                                send_message(chat_id, result, reply_to_message_id=incoming_message_id)
-                                return jsonify({"status": "ok"})
-                        except Exception as e:
-                            print(f"Error parsing wake prompt: {e}")
-
                     # Try to handle as wake reply
                     if handle_wake_reply(supabase, reply_msg_id, text, sender_name):
+                        send_message(chat_id, "✅ Wake reply forwarded successfully!", reply_to_message_id=incoming_message_id)
                         return jsonify({"status": "ok"}) # Handled, exit
                 
                 parts = text.split()
                 command = parts[0].lower()
+                if "@" in command:
+                    command = command.split("@")[0]
                 
                 if command == "/start":
                     welcome_text = "👋 *Welcome to the Toggl Status Bot!* \n\nHere are the available commands:\n\n"
