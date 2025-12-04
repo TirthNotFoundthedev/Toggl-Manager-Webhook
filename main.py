@@ -1,6 +1,6 @@
 import os
 import functions_framework
-from flask import jsonify
+from flask import jsonify, render_template_string
 import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -481,7 +481,163 @@ def telegram_webhook(request):
 
         return jsonify({"status": "ok"})
     
-    return "Telegram Bot Webhook is active!"
+    # HTML Landing Page
+    html_content = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Toggl Bot Status</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a; /* Dark gray/black */
+            color: #e0e0e0;
+            font-family: 'Courier New', Courier, monospace; /* Monospace for that retro/code feel */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Cozy Minecraft-like Background Gradient */
+        .background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, #0f0c29, #302b63, #24243e);
+            z-index: -1;
+        }
+        
+        /* Pixel stars/particles */
+        .star {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: #fff;
+            opacity: 0.6;
+            animation: twinkle 4s infinite ease-in-out;
+        }
+
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
+        .container {
+            text-align: center;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 40px;
+            border: 4px solid #4a4a4a; /* Pixel border look */
+            border-radius: 4px; /* Slight rounding but mostly square */
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 4px 4px 0px #000;
+            color: #50c878; /* Emerald green */
+        }
+
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 30px;
+            color: #ccc;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .btn {
+            text-decoration: none;
+            color: #fff;
+            padding: 15px 30px;
+            font-weight: bold;
+            border: 2px solid #fff;
+            background: rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn:hover {
+            background: #fff;
+            color: #1a1a1a;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+            transform: translateY(-3px);
+        }
+
+        .btn-github:hover {
+            background: #6cc644; /* GitHub Greenish */
+            border-color: #6cc644;
+        }
+
+        .btn-docs:hover {
+            background: #4078c0; /* Blueish */
+            border-color: #4078c0;
+        }
+
+        /* Minecraft Torch flicker effect overlay */
+        .torch-light {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, rgba(255, 160, 0, 0.05), transparent 60%);
+            pointer-events: none;
+            animation: flicker 3s infinite alternate;
+        }
+
+        @keyframes flicker {
+            0% { opacity: 0.8; transform: scale(1); }
+            100% { opacity: 1; transform: scale(1.02); }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="background">
+        <!-- Generated stars via JS below -->
+    </div>
+    <div class="torch-light"></div>
+
+    <div class="container">
+        <h1>🟢 Bot is Active</h1>
+        <p>The Toggl Status Checker is running smoothly.</p>
+        
+        <div class="buttons">
+            <a href="https://github.com/TirthNotFoundthedev/Toggl-Manager-Webhook" target="_blank" class="btn btn-github">GitHub</a>
+            <a href="#" class="btn btn-docs">Documentation</a>
+        </div>
+    </div>
+
+    <script>
+        // Create random stars
+        const bg = document.querySelector('.background');
+        for(let i=0; i<50; i++) {
+            let star = document.createElement('div');
+            star.className = 'star';
+            star.style.left = Math.random() * 100 + '%';
+            star.style.top = Math.random() * 100 + '%';
+            star.style.animationDelay = Math.random() * 5 + 's';
+            bg.appendChild(star);
+        }
+    </script>
+</body>
+</html>
+    """
+    return render_template_string(html_content)
 
 # ... (handle_status_request and handle_today_request stay here) ...
 
