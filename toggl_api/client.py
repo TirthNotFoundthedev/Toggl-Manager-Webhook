@@ -82,9 +82,9 @@ def get_project_details(project_id, workspace_id, api_token):
         return "Unknown Project"
     except TogglLimitError:
         return "Project (Limit Reached)"
-        except Exception as e:
-            print(f"Project Fetch Error: {e}")
-            return "Unknown Project"
+    except Exception as e:
+        print(f"Project Fetch Error: {e}")
+        return "Unknown Project"
     
     def get_last_time_entry(api_token):
         """
