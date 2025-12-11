@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - Toggl Bot</title>
+    <style>
+        body { font-family: sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; background-color: #fcfcfc; }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; border-bottom: 1px solid #eee; padding-bottom: 1rem; }
+        .user-info { display: flex; align-items: center; gap: 1rem; }
+        .user-info img { border-radius: 50%; width: 40px; height: 40px; }
+        .logout { color: #d9534f; text-decoration: none; font-weight: bold; font-size: 0.9rem; }
+        .content { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        code { background: #eee; padding: 0.2rem 0.4rem; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Dashboard</h1>
+        <div class="user-info">
+            {% if user.photo_url %}
+            <img src="{{ user.photo_url }}" alt="Avatar">
+            {% endif %}
+            <span>{{ user.first_name }}</span>
+            <a href="{{ url_for('logout') }}" class="logout">Logout</a>
+        </div>
+    </div>
+    <div class="content">
+        <h2>Your Settings</h2>
+        <p>Welcome! This area is under construction.</p>
+        <p><strong>Telegram ID:</strong> <code>{{ user.id }}</code></p>
+        <p><strong>Username:</strong> {{ user.username }}</p>
+    </div>
+</body>
+</html>
