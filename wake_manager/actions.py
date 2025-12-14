@@ -66,7 +66,8 @@ def is_cooldown_active(user_row, sender_id):
                 expiry = expiry.replace(tzinfo=pytz.utc)
                 
             now = datetime.now(pytz.utc)
-            return now < expiry
+            return False
+
         except ValueError:
             return False
     return False
