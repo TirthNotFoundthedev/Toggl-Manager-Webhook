@@ -143,65 +143,77 @@ def get_user_keyboard(users, command_type):
         
     return {"inline_keyboard": keyboard}
 
-def get_report_keyboard(user_name, current_view, offset=0):
-    """Generates toggle button for report view."""
-    if current_view == "normal":
-        return {"inline_keyboard": [[{"text": "Show Detailed 📝", "callback_data": f"view:today:{user_name}:detailed:{offset}"}]]}
+def get_report_keyboard(user_name, current_view, target_date_str):
+    """Generates toggle button and navigation for report view."""
+    # Ensure we have a date object
+    tz = pytz.timezone('Asia/Kolkata')
+    if not target_date_str:
+        current_dt = datetime.now(tz)
+        target_date_str = current_dt.strftime('%Y-%m-%d')
     else:
-        return {"inline_keyboard": [[{"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal:{offset}"}]]}
+        try:
+            current_dt = datetime.strptime(target_date_str, '%Y-%m-%d')
+        except ValueError:
+            current_dt = datetime.now(tz)
+            target_date_str = current_dt.strftime('%Y-%m-%d')
 
-def get_leaderboard_keyboard(period, offset):
-    """Generates navigation buttons for leaderboard with smart context switching."""
+    prev_date = (current_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+    next_date = (current_dt + timedelta(days=1)).strftime('%Y-%m-%d')
     
-    # Logic for Toggle:
-    # Daily -> Weekly: Find the week containing the current daily date.
-    # Weekly -> Daily: Find the Monday of the current week.
+    # Toggle View Button
+    if current_view == "normal":
+        view_btn = {"text": "Show Detailed 📝", "callback_data": f"view:today:{user_name}:detailed:{target_date_str}"}
+    else:
+        view_btn = {"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal:{target_date_str}"}
     
-    timezone_str = 'Asia/Kolkata'
-    tz = pytz.timezone(timezone_str)
-    # Normalize 'now' to midnight to ensure consistent day math
-    now = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Navigation Row
+    nav_row = [
+        {"text": "⬅️", "callback_data": f"view:today:{user_name}:{current_view}:{prev_date}"},
+        {"text": "Refresh 🔄", "callback_data": f"view:today:{user_name}:{current_view}:{target_date_str}"},
+        {"text": "➡️", "callback_data": f"view:today:{user_name}:{current_view}:{next_date}"}
+    ]
 
+    return {"inline_keyboard": [[view_btn], nav_row]}
+
+def get_leaderboard_keyboard(period, target_date_str):
+    """Generates navigation buttons for leaderboard with absolute date logic."""
+    tz = pytz.timezone('Asia/Kolkata')
+    
+    if not target_date_str:
+        current_dt = datetime.now(tz)
+        target_date_str = current_dt.strftime('%Y-%m-%d')
+    else:
+        try:
+            current_dt = datetime.strptime(target_date_str, '%Y-%m-%d')
+        except ValueError:
+            current_dt = datetime.now(tz)
+            target_date_str = current_dt.strftime('%Y-%m-%d')
+
+    # Calculate Prev/Next based on period
     if period == 'daily':
-        # Switching TO Weekly
-        # 1. Determine the specific date we are currently looking at
-        focus_date = now + timedelta(days=offset)
-        
-        # 2. Determine the Monday of the week that date falls in
-        focus_week_start = focus_date - timedelta(days=focus_date.weekday())
-        
-        # 3. Determine the Monday of the "Current" real-world week
-        current_real_week_start = now - timedelta(days=now.weekday())
-        
-        # 4. Calculate difference in weeks
-        # (Target Monday - Current Monday) / 7 days
-        new_offset = (focus_week_start - current_real_week_start).days // 7
-        
+        prev_date = (current_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+        next_date = (current_dt + timedelta(days=1)).strftime('%Y-%m-%d')
         toggle_text = "Switch to Weekly 📅"
         toggle_period = 'weekly'
-        
-    else: # period == 'weekly'
-        # Switching TO Daily
-        # 1. Determine the Monday of the week we are looking at
-        # Start with current real week Monday
-        current_real_week_start = now - timedelta(days=now.weekday())
-        # Apply offset
-        focus_week_start = current_real_week_start + timedelta(weeks=offset)
-        
-        # 2. Calculate difference in days between that Monday and "Now"
-        new_offset = (focus_week_start - now).days
-        
+    else: # weekly
+        prev_date = (current_dt - timedelta(weeks=1)).strftime('%Y-%m-%d')
+        next_date = (current_dt + timedelta(weeks=1)).strftime('%Y-%m-%d')
         toggle_text = "Switch to Daily 📅"
         toggle_period = 'daily'
     
-    keyboard = [
-        [
-            {"text": "⬅️ Prev", "callback_data": f"lb:{period}:{offset-1}"},
-            {"text": toggle_text, "callback_data": f"lb:{toggle_period}:{new_offset}"},
-            {"text": "Next ➡️", "callback_data": f"lb:{period}:{offset+1}"}
-        ]
+    # Navigation Row
+    nav_row = [
+        {"text": "⬅️", "callback_data": f"lb:{period}:{prev_date}"},
+        {"text": toggle_text, "callback_data": f"lb:{toggle_period}:{target_date_str}"},
+        {"text": "➡️", "callback_data": f"lb:{period}:{next_date}"}
     ]
-    return {"inline_keyboard": keyboard}
+    
+    # Refresh Row
+    refresh_row = [
+         {"text": "Refresh 🔄", "callback_data": f"lb:{period}:{target_date_str}"}
+    ]
+    
+    return {"inline_keyboard": [nav_row, refresh_row]}
 
 @functions_framework.http
 def telegram_webhook(request):
@@ -237,6 +249,7 @@ def telegram_webhook(request):
                 if cmd_type == "status":
                     handle_status_request(chat_id, target, sender_id, loading_msg_id)
                 elif cmd_type == "today":
+                    # Default to today
                     handle_today_request(chat_id, target, False, sender_id, loading_msg_id)
                 elif cmd_type == "wake":
                     # Wake Logic
@@ -252,34 +265,31 @@ def telegram_webhook(request):
                         send_message(chat_id, result)
 
             elif callback_data.startswith("view:"):
-                # Format: view:today:Tirth:detailed:offset
+                # Format: view:today:Tirth:detailed:YYYY-MM-DD
                 parts = callback_data.split(":")
+                # view:today:Tirth:detailed:2025-01-01
                 cmd_type = parts[1]
                 target = parts[2]
                 view_mode = parts[3]
                 detailed = (view_mode == "detailed")
                 
-                offset = 0
+                target_date_str = None
                 if len(parts) > 4:
-                    try:
-                        offset = int(parts[4])
-                    except:
-                        pass
+                    target_date_str = parts[4]
                 
                 # Edit directly
-                handle_today_request(chat_id, target, detailed, sender_id, message_id, is_edit=True, offset=offset)
+                handle_today_request(chat_id, target, detailed, sender_id, message_id, is_edit=True, target_date_str=target_date_str)
 
             elif callback_data.startswith("lb:"):
-                # Format: lb:daily:-1
+                # Format: lb:daily:YYYY-MM-DD
                 parts = callback_data.split(":")
                 period = parts[1]
-                try:
-                    offset = int(parts[2])
-                except:
-                    offset = 0
+                target_date_str = None
+                if len(parts) > 2:
+                    target_date_str = parts[2]
                 
                 # Edit leaderboard directly (navigation)
-                handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=True)
+                handle_leaderboard_request(chat_id, period, target_date_str, message_id, is_edit=True)
 
             return jsonify({"status": "ok"})
 
@@ -376,25 +386,28 @@ def telegram_webhook(request):
                                 send_message(chat_id, f"Error fetching menu: {e}", reply_to_message_id=incoming_message_id)
 
                 elif command == "/today":
-                    # ... (existing /today logic) ...
                     if not supabase:
                         send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
                     else:
                         args = parts[1:]
                         detailed = False
-                        offset = 0
                         target_name = None
+                        target_date_str = None
                         
                         # Parse args
                         cleaned_args = []
+                        tz = pytz.timezone('Asia/Kolkata')
+                        
                         for arg in args:
                             arg_lower = arg.lower()
                             if arg_lower == "detailed":
                                 detailed = True
                             else:
                                 try:
-                                    # Try to parse as integer offset
+                                    # Try to parse as integer offset and convert to date immediately
                                     offset = int(arg)
+                                    target_date = datetime.now(tz) + timedelta(days=offset)
+                                    target_date_str = target_date.strftime('%Y-%m-%d')
                                 except ValueError:
                                     # Assume it's a name if not int and not reserved word
                                     cleaned_args.append(arg)
@@ -405,7 +418,7 @@ def telegram_webhook(request):
                         if target_name:
                             loading_msg = send_message(chat_id, f"⏳ Processing report for {target_name}...", reply_to_message_id=incoming_message_id)
                             loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
-                            handle_today_request(chat_id, target_name, detailed, sender_id, loading_msg_id, offset=offset)
+                            handle_today_request(chat_id, target_name, detailed, sender_id, loading_msg_id, target_date_str=target_date_str)
                         else:
                             try:
                                 response = supabase.table('Users').select("*").execute()
@@ -459,7 +472,10 @@ def telegram_webhook(request):
                         # Parse arguments (Daily/Weekly, offset)
                         args = parts[1:]
                         period = 'daily'
-                        offset = 0
+                        target_date_str = None
+                        
+                        tz = pytz.timezone('Asia/Kolkata')
+                        
                         for arg in args:
                             arg_lower = arg.lower()
                             if arg_lower in ['daily', 'd']:
@@ -469,11 +485,13 @@ def telegram_webhook(request):
                             else:
                                 try:
                                     offset = int(arg)
+                                    target_date = datetime.now(tz) + timedelta(days=offset)
+                                    target_date_str = target_date.strftime('%Y-%m-%d')
                                 except ValueError:
                                     pass
 
                         # Use new handler function
-                        handle_leaderboard_request(chat_id, period, offset, loading_msg_id, is_edit=False, reply_to_id=incoming_message_id)
+                        handle_leaderboard_request(chat_id, period, target_date_str, loading_msg_id, is_edit=False, reply_to_id=incoming_message_id)
 
         return jsonify({"status": "ok"})
     
@@ -637,7 +655,7 @@ def telegram_webhook(request):
 
 # ... (handle_status_request and handle_today_request stay here) ...
 
-def handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=False, reply_to_id=None):
+def handle_leaderboard_request(chat_id, period, target_date_str, message_id, is_edit=False, reply_to_id=None):
     try:
         if is_edit:
             edit_message(chat_id, message_id, "⏳ Updating...")
@@ -656,10 +674,10 @@ def handle_leaderboard_request(chat_id, period, offset, message_id, is_edit=Fals
             return
 
         # Generate Report
-        report = get_leaderboard_report(users, period=period, offset=offset, timezone_str='Asia/Kolkata')
+        report = get_leaderboard_report(users, period=period, target_date_str=target_date_str, timezone_str='Asia/Kolkata')
         
         # Generate Navigation Keyboard
-        keyboard = get_leaderboard_keyboard(period, offset)
+        keyboard = get_leaderboard_keyboard(period, target_date_str)
         
         if is_edit:
             edit_message(chat_id, message_id, report, reply_markup=keyboard)
@@ -731,7 +749,7 @@ def handle_status_request(chat_id, target_name, sender_id, loading_msg_id):
             delete_message(chat_id, loading_msg_id)
         send_message(chat_id, "Error checking status.")
 
-def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, is_edit=False, offset=0):
+def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, is_edit=False, target_date_str=None):
     try:
         if is_edit:
             edit_message(chat_id, message_id, "⏳ Updating...")
@@ -743,17 +761,14 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
         target_user = None
         
         if target_name == "all":
-            # Handle "All" for today? The prompt said "button all followed by button for each user".
-            # If "All" is clicked, we probably want a summary for everyone.
-            # Implementing a loop for ALL users.
+            # Handle "All" for today
             reports = []
             for user in users:
                 api = user.get('toggl_token')
                 name = user.get('user_name', 'User').capitalize()
                 if api:
-                    # Force normal view for "All" to avoid spam? Or respect 'detailed'?
-                    # Let's respect 'detailed' but it might be huge.
-                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed, offset=offset)
+                    # Respect detailed, pass target date
+                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str)
                     reports.append(rep)
             
             final_report = ("\n" + "-"*10 + "\n").join(reports)
@@ -781,10 +796,10 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
                     final_report = f"⚠️ {user_name} has no Toggl token."
                     keyboard = None
                 else:
-                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed, offset=offset)
+                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str)
                     # Add Toggle Button
                     current_view = "detailed" if detailed else "normal"
-                    keyboard = get_report_keyboard(user_name, current_view, offset)
+                    keyboard = get_report_keyboard(user_name, current_view, target_date_str)
 
         if is_edit:
             # For toggle, we EDIT the message

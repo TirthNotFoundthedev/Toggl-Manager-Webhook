@@ -168,13 +168,25 @@ def get_user_status_string(user_name, api_token):
                     print(f"Date parse error: {e}")
                     
         return f"🔴 {user_name} is currently NOT tracking time.{last_seen_str}"
-def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, offset=0):
+def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, target_date_str=None):
     """
-    Generates a report for 'today' (plus offset) in the specified timezone.
+    Generates a report for a specific date (YYYY-MM-DD) in the specified timezone.
+    If target_date_str is None, defaults to today.
     """
     try:
         tz = pytz.timezone(timezone_str)
-        now = datetime.now(tz) + timedelta(days=offset)
+        if target_date_str:
+            # Parse provided date
+            try:
+                # Naive date from string
+                dt_naive = datetime.strptime(target_date_str, '%Y-%m-%d')
+                # Localize to target timezone
+                now = tz.localize(dt_naive)
+            except ValueError:
+                return f"⚠️ Invalid date format: {target_date_str}"
+        else:
+            now = datetime.now(tz)
+
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         
@@ -283,33 +295,41 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, o
         print(f"Report Error: {e}")
         return f"Failed to generate report for {user_name}."
 
-def get_leaderboard_report(users, period='daily', offset=0, timezone_str='Asia/Kolkata'):
+def get_leaderboard_report(users, period='daily', target_date_str=None, timezone_str='Asia/Kolkata'):
     """
-    Generates a leaderboard report for the given period and offset.
+    Generates a leaderboard report for the given period and target date.
     period: 'daily' or 'weekly'
-    offset: integer (0 = current, -1 = previous, etc.)
+    target_date_str: 'YYYY-MM-DD' (defaults to today if None)
     """
     try:
         tz = pytz.timezone(timezone_str)
-        now = datetime.now(tz)
+        
+        if target_date_str:
+            try:
+                dt_naive = datetime.strptime(target_date_str, '%Y-%m-%d')
+                # Localize
+                # We set it to noon to avoid any DST/midnight weirdness when finding weeks, 
+                # though 00:00 is usually fine if we are consistent.
+                anchor_date = tz.localize(dt_naive.replace(hour=12)) 
+            except ValueError:
+                return "Invalid date format."
+        else:
+            anchor_date = datetime.now(tz)
         
         start_date = None
         end_date = None
         header = ""
         
         if period == 'daily':
-            target_date = now + timedelta(days=offset)
-            start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_date = anchor_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = anchor_date.replace(hour=23, minute=59, second=59, microsecond=999999)
             
-            date_str = target_date.strftime('%d/%m/%y')
+            date_str = start_date.strftime('%d/%m/%y')
             header = f"📊 Daily leaderboard for {date_str}"
             
         elif period == 'weekly':
-            # Offset by weeks first
-            target_week_point = now + timedelta(weeks=offset)
-            # Find Monday of that week (0 = Monday)
-            start_of_week = target_week_point - timedelta(days=target_week_point.weekday())
+            # Find Monday of the week containing anchor_date
+            start_of_week = anchor_date - timedelta(days=anchor_date.weekday())
             end_of_week = start_of_week + timedelta(days=6)
             
             start_date = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
