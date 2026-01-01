@@ -143,12 +143,12 @@ def get_user_keyboard(users, command_type):
         
     return {"inline_keyboard": keyboard}
 
-def get_report_keyboard(user_name, current_view):
+def get_report_keyboard(user_name, current_view, offset=0):
     """Generates toggle button for report view."""
     if current_view == "normal":
-        return {"inline_keyboard": [[{"text": "Show Detailed 📝", "callback_data": f"view:today:{user_name}:detailed"}]]}
+        return {"inline_keyboard": [[{"text": "Show Detailed 📝", "callback_data": f"view:today:{user_name}:detailed:{offset}"}]]}
     else:
-        return {"inline_keyboard": [[{"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal"}]]}
+        return {"inline_keyboard": [[{"text": "Show Normal 📊", "callback_data": f"view:today:{user_name}:normal:{offset}"}]]}
 
 def get_leaderboard_keyboard(period, offset):
     """Generates navigation buttons for leaderboard with smart context switching."""
@@ -252,12 +252,22 @@ def telegram_webhook(request):
                         send_message(chat_id, result)
 
             elif callback_data.startswith("view:"):
-                # Format: view:today:Tirth:detailed
-                _, cmd_type, target, view_mode = callback_data.split(":")
+                # Format: view:today:Tirth:detailed:offset
+                parts = callback_data.split(":")
+                cmd_type = parts[1]
+                target = parts[2]
+                view_mode = parts[3]
                 detailed = (view_mode == "detailed")
                 
+                offset = 0
+                if len(parts) > 4:
+                    try:
+                        offset = int(parts[4])
+                    except:
+                        pass
+                
                 # Edit directly
-                handle_today_request(chat_id, target, detailed, sender_id, message_id, is_edit=True)
+                handle_today_request(chat_id, target, detailed, sender_id, message_id, is_edit=True, offset=offset)
 
             elif callback_data.startswith("lb:"):
                 # Format: lb:daily:-1
@@ -372,17 +382,30 @@ def telegram_webhook(request):
                     else:
                         args = parts[1:]
                         detailed = False
+                        offset = 0
                         target_name = None
-                        if "detailed" in [a.lower() for a in args]:
-                            detailed = True
-                            args = [a for a in args if a.lower() != "detailed"]
-                        if args:
-                            target_name = args[0].lower()
+                        
+                        # Parse args
+                        cleaned_args = []
+                        for arg in args:
+                            arg_lower = arg.lower()
+                            if arg_lower == "detailed":
+                                detailed = True
+                            else:
+                                try:
+                                    # Try to parse as integer offset
+                                    offset = int(arg)
+                                except ValueError:
+                                    # Assume it's a name if not int and not reserved word
+                                    cleaned_args.append(arg)
+                        
+                        if cleaned_args:
+                            target_name = cleaned_args[0].lower()
                         
                         if target_name:
                             loading_msg = send_message(chat_id, f"⏳ Processing report for {target_name}...", reply_to_message_id=incoming_message_id)
                             loading_msg_id = loading_msg.get("result", {}).get("message_id") if loading_msg else None
-                            handle_today_request(chat_id, target_name, detailed, sender_id, loading_msg_id)
+                            handle_today_request(chat_id, target_name, detailed, sender_id, loading_msg_id, offset=offset)
                         else:
                             try:
                                 response = supabase.table('Users').select("*").execute()
@@ -708,7 +731,7 @@ def handle_status_request(chat_id, target_name, sender_id, loading_msg_id):
             delete_message(chat_id, loading_msg_id)
         send_message(chat_id, "Error checking status.")
 
-def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, is_edit=False):
+def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, is_edit=False, offset=0):
     try:
         if is_edit:
             edit_message(chat_id, message_id, "⏳ Updating...")
@@ -730,7 +753,7 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
                 if api:
                     # Force normal view for "All" to avoid spam? Or respect 'detailed'?
                     # Let's respect 'detailed' but it might be huge.
-                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed)
+                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed, offset=offset)
                     reports.append(rep)
             
             final_report = ("\n" + "-"*10 + "\n").join(reports)
@@ -758,10 +781,10 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
                     final_report = f"⚠️ {user_name} has no Toggl token."
                     keyboard = None
                 else:
-                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed)
+                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed, offset=offset)
                     # Add Toggle Button
                     current_view = "detailed" if detailed else "normal"
-                    keyboard = get_report_keyboard(user_name, current_view)
+                    keyboard = get_report_keyboard(user_name, current_view, offset)
 
         if is_edit:
             # For toggle, we EDIT the message

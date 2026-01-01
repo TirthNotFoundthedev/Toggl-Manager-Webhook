@@ -168,13 +168,13 @@ def get_user_status_string(user_name, api_token):
                     print(f"Date parse error: {e}")
                     
         return f"🔴 {user_name} is currently NOT tracking time.{last_seen_str}"
-def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False):
+def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, offset=0):
     """
-    Generates a report for 'today' in the specified timezone.
+    Generates a report for 'today' (plus offset) in the specified timezone.
     """
     try:
         tz = pytz.timezone(timezone_str)
-        now = datetime.now(tz)
+        now = datetime.now(tz) + timedelta(days=offset)
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         
