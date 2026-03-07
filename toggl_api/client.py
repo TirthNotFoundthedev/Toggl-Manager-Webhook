@@ -168,7 +168,26 @@ def get_user_status_string(user_name, api_token):
                     print(f"Date parse error: {e}")
                     
         return f"🔴 {user_name} is currently NOT tracking time.{last_seen_str}"
-def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, target_date_str=None):
+
+def sync_user_data(supabase, user_id, api_token):
+    """
+    Fetches past 7 days of data and saves to Supabase UserData column.
+    """
+    if not supabase or not api_token:
+        return
+        
+    try:
+        now = datetime.now(pytz.utc)
+        start_date = (now - timedelta(days=7)).isoformat()
+        end_date = now.isoformat()
+        
+        entries = get_time_entries(api_token, start_date, end_date)
+        if entries:
+            supabase.table('Users').update({'user_data': entries}).eq('id', user_id).execute()
+    except Exception as e:
+        print(f"Sync Error for {user_id}: {e}")
+
+def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, target_date_str=None, cached_entries=None):
     """
     Generates a report for a specific date (YYYY-MM-DD) in the specified timezone.
     If target_date_str is None, defaults to today.
@@ -200,27 +219,22 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         except TogglLimitError as e:
             if cached_entries:
                 # Filter cached entries for the target day
-                # Entries have 'start' and 'stop' in UTC ISO format
                 day_entries = []
                 for entry in cached_entries:
                     try:
-                        entry_start = datetime.fromisoformat(entry['start'].replace('Z', '+00:00'))
-                        # Check if entry falls within our start/end of day (UTC)
-                        # To be accurate, we should compare with the start_of_day/end_of_day 
-                        # we calculated earlier which are in UTC.
-                        
+                        entry_start = datetime.fromisoformat(entry['start'].replace('Z', '+00:00'))      
                         # Calculate start/end in UTC for comparison
                         utc_start = start_of_day.astimezone(pytz.utc)
                         utc_end = end_of_day.astimezone(pytz.utc)
-                        
+
                         if utc_start <= entry_start <= utc_end:
                             day_entries.append(entry)
                     except:
                         continue
-                
+
                 if not day_entries:
-                    return f"⚠️ Toggl API Limit reached and no cached data found for {date_str}."
-                
+                    return f"⚠️ Toggl API Limit reached and no cached data found for {target_date_str or 'today'}."        
+
                 entries = day_entries
                 is_cached = True
             else:
@@ -235,7 +249,6 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         total_seconds = 0
         
         # Pre-fetch project names to minimize API calls
-        # Identify unique PIDs
         unique_pids = set()
         pid_workspace_map = {} # pid -> wid
         for entry in entries:
@@ -247,8 +260,6 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         # Fetch names
         project_names = {} # pid -> name
         for pid in unique_pids:
-            # If we are in cached mode, project details might also fail.
-            # We could ideally cache these too, but for now we try/catch.
             project_names[pid] = get_project_details(pid, pid_workspace_map[pid], api_token)
             
         project_totals = {} # map Project Name -> seconds
@@ -282,8 +293,6 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
                 stop_str = stop_dt.strftime("%H:%M")
                 dur_str = format_duration(duration)
                 
-                # Include project name in detailed view too
-                # Changed placement: Description first, then Project
                 detailed_lines.append(f"• `{start_str}` - `{stop_str}` ({dur_str})\n  📝 {desc}")
                 if project_name and project_name != "No Project":
                     detailed_lines.append(f"  📂 {project_name}")
@@ -300,40 +309,16 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         
         msg += f"📅 Time entries for {user_name} on {date_str}\n\n"
 
-def sync_user_data(supabase, user_id, api_token):
-    """
-    Fetches past 7 days of data and saves to Supabase UserData column.
-    """
-    if not supabase or not api_token:
-        return
-        
-    try:
-        now = datetime.now(pytz.utc)
-        start_date = (now - timedelta(days=7)).isoformat()
-        end_date = now.isoformat()
-        
-        entries = get_time_entries(api_token, start_date, end_date)
-        if entries:
-            supabase.table('Users').update({'user_data': entries}).eq('id', user_id).execute()
-    except Exception as e:
-        print(f"Sync Error for {user_id}: {e}")
-
-        
         if detailed:
-            # Join with double newlines for spacing
             msg += "\n\n".join(detailed_lines)
         else:
-            # Grouped Output
-            # Sort grouped entries for consistent output
             for (desc, proj), dur in sorted(grouped_entries.items()):
                 dur_str = format_duration(dur)
-                # Changed placement: Description first, then Project
                 msg += f"• {dur_str} — {desc}\n"
-                if proj and proj != "No Project": # Only show project if it's available and not generic
+                if proj and proj != "No Project":
                     msg += f"  📂 {proj}\n"
-                msg += "\n" # Add a newline for spacing between grouped entries
+                msg += "\n"
 
-        # Project Totals Section
         if project_totals:
             msg += f"📊 Project totals:\n"
             for proj, dur in sorted(project_totals.items()):
@@ -359,9 +344,6 @@ def get_leaderboard_report(users, period='daily', target_date_str=None, timezone
         if target_date_str:
             try:
                 dt_naive = datetime.strptime(target_date_str, '%Y-%m-%d')
-                # Localize
-                # We set it to noon to avoid any DST/midnight weirdness when finding weeks, 
-                # though 00:00 is usually fine if we are consistent.
                 anchor_date = tz.localize(dt_naive.replace(hour=12)) 
             except ValueError:
                 return "Invalid date format."
@@ -380,7 +362,6 @@ def get_leaderboard_report(users, period='daily', target_date_str=None, timezone
             header = f"📊 Daily leaderboard for {date_str}"
             
         elif period == 'weekly':
-            # Find Monday of the week containing anchor_date
             start_of_week = anchor_date - timedelta(days=anchor_date.weekday())
             end_of_week = start_of_week + timedelta(days=6)
             
@@ -408,9 +389,7 @@ def get_leaderboard_report(users, period='daily', target_date_str=None, timezone
                 try:
                     entries = get_time_entries(api_token, start_iso, end_iso)
                 except TogglLimitError:
-                    # Fallback to cache for leaderboard
                     if cached_entries:
-                        # Calculate start/end in UTC for comparison
                         utc_start = start_date.astimezone(pytz.utc)
                         utc_end = end_date.astimezone(pytz.utc)
                         
@@ -453,7 +432,7 @@ def get_leaderboard_report(users, period='daily', target_date_str=None, timezone
         for idx, data in enumerate(leaderboard_data, 1):
             rank_str = f"{idx}."
             trophy = " 🏆" if idx == 1 else ""
-            dur_str = format_duration(data['duration']).replace('`', '') # Remove backticks for cleaner leaderboard look
+            dur_str = format_duration(data['duration']).replace('`', '')
             
             msg += f"{rank_str}{trophy} {data['name']}: {dur_str}\n"
             
