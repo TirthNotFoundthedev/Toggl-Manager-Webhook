@@ -196,8 +196,35 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         
         try:
             entries = get_time_entries(api_token, start_iso, end_iso)
+            is_cached = False
         except TogglLimitError as e:
-            return f"⚠️ Could not generate report for {user_name}: {str(e)}"
+            if cached_entries:
+                # Filter cached entries for the target day
+                # Entries have 'start' and 'stop' in UTC ISO format
+                day_entries = []
+                for entry in cached_entries:
+                    try:
+                        entry_start = datetime.fromisoformat(entry['start'].replace('Z', '+00:00'))
+                        # Check if entry falls within our start/end of day (UTC)
+                        # To be accurate, we should compare with the start_of_day/end_of_day 
+                        # we calculated earlier which are in UTC.
+                        
+                        # Calculate start/end in UTC for comparison
+                        utc_start = start_of_day.astimezone(pytz.utc)
+                        utc_end = end_of_day.astimezone(pytz.utc)
+                        
+                        if utc_start <= entry_start <= utc_end:
+                            day_entries.append(entry)
+                    except:
+                        continue
+                
+                if not day_entries:
+                    return f"⚠️ Toggl API Limit reached and no cached data found for {date_str}."
+                
+                entries = day_entries
+                is_cached = True
+            else:
+                return f"⚠️ Could not generate report for {user_name}: {str(e)}"
         
         # Sort entries by start time (oldest to newest)
         entries.sort(key=lambda x: datetime.fromisoformat(x['start'].replace('Z', '+00:00')))
@@ -220,6 +247,8 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
         # Fetch names
         project_names = {} # pid -> name
         for pid in unique_pids:
+            # If we are in cached mode, project details might also fail.
+            # We could ideally cache these too, but for now we try/catch.
             project_names[pid] = get_project_details(pid, pid_workspace_map[pid], api_token)
             
         project_totals = {} # map Project Name -> seconds
@@ -265,7 +294,30 @@ def get_daily_report(user_name, api_token, timezone_str='UTC', detailed=False, t
 
         # Build Message
         date_str = now.strftime('%Y-%m-%d')
-        msg = f"📅 Time entries for {user_name} on {date_str}\n\n"
+        msg = ""
+        if is_cached:
+            msg += "⚠️ *Showing Cached Data (Toggl API Limit)*\n"
+        
+        msg += f"📅 Time entries for {user_name} on {date_str}\n\n"
+
+def sync_user_data(supabase, user_id, api_token):
+    """
+    Fetches past 7 days of data and saves to Supabase UserData column.
+    """
+    if not supabase or not api_token:
+        return
+        
+    try:
+        now = datetime.now(pytz.utc)
+        start_date = (now - timedelta(days=7)).isoformat()
+        end_date = now.isoformat()
+        
+        entries = get_time_entries(api_token, start_date, end_date)
+        if entries:
+            supabase.table('Users').update({'user_data': entries}).eq('id', user_id).execute()
+    except Exception as e:
+        print(f"Sync Error for {user_id}: {e}")
+
         
         if detailed:
             # Join with double newlines for spacing
@@ -342,27 +394,54 @@ def get_leaderboard_report(users, period='daily', target_date_str=None, timezone
         end_iso = end_date.isoformat()
         
         leaderboard_data = []
+        is_any_cached = False
         
         for user in users:
             user_name = user.get('user_name', 'Unknown').capitalize()
             api_token = user.get('toggl_token')
+            cached_entries = user.get('user_data')
             
             total_seconds = 0
+            is_user_cached = False
+
             if api_token:
                 try:
                     entries = get_time_entries(api_token, start_iso, end_iso)
-                    for entry in entries:
-                        duration = entry.get('duration', 0)
-                        if duration < 0:
-                            import time
-                            duration = int(time.time()) + duration
-                        total_seconds += duration
                 except TogglLimitError:
-                    # Fail gracefully for leaderboard?
-                    # Maybe append a special entry or just skip with 0?
-                    # Or return an error for the whole board?
-                    # Let's note it in the name
-                    user_name += " (⚠️ Limit)"
+                    # Fallback to cache for leaderboard
+                    if cached_entries:
+                        # Calculate start/end in UTC for comparison
+                        utc_start = start_date.astimezone(pytz.utc)
+                        utc_end = end_date.astimezone(pytz.utc)
+                        
+                        entries = []
+                        for entry in cached_entries:
+                            try:
+                                entry_start = datetime.fromisoformat(entry['start'].replace('Z', '+00:00'))
+                                if utc_start <= entry_start <= utc_end:
+                                    entries.append(entry)
+                            except:
+                                continue
+                        
+                        if entries:
+                            is_user_cached = True
+                            is_any_cached = True
+                        else:
+                            user_name += " (⚠️ Limit)"
+                            entries = []
+                    else:
+                        user_name += " (⚠️ Limit)"
+                        entries = []
+                
+                for entry in entries:
+                    duration = entry.get('duration', 0)
+                    if duration < 0:
+                        import time
+                        duration = int(time.time()) + duration
+                    total_seconds += duration
+                
+                if is_user_cached:
+                    user_name += " (Cached)"
             
             leaderboard_data.append({'name': user_name, 'duration': total_seconds})
             

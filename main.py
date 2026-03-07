@@ -4,7 +4,7 @@ from flask import jsonify, render_template_string
 import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from toggl_api.client import get_user_status_string, get_daily_report, get_leaderboard_report
+from toggl_api.client import get_user_status_string, get_daily_report, get_leaderboard_report, sync_user_data
 from wake_manager.actions import perform_wake, perform_wake_all, handle_wake_reply
 import json
 from datetime import datetime, timedelta
@@ -40,6 +40,10 @@ COMMANDS = {
     "wake": {
         "description": "Nudge a user to start working if they aren't tracking time.",
         "usage": "/wake [user] [message]\nExamples:\n`/wake` - Menu\n`/wake Tirth` - Wake Tirth\n`/wake Tirth Get back to work!` - Custom msg"
+    },
+    "settings": {
+        "description": "Manage your profile (name and Toggl token).",
+        "usage": "/settings"
     }
 }
 
@@ -291,6 +295,24 @@ def telegram_webhook(request):
                 # Edit leaderboard directly (navigation)
                 handle_leaderboard_request(chat_id, period, target_date_str, message_id, is_edit=True)
 
+            elif callback_data == "reg:new":
+                # Prompt for name
+                delete_message(chat_id, message_id)
+                send_message(chat_id, "Please reply to this message with your display name for the bot. (Max 15 chars)", 
+                             reply_markup={"force_reply": True})
+
+            elif callback_data == "settings:name":
+                # Prompt for name
+                delete_message(chat_id, message_id)
+                send_message(chat_id, "Please reply to this message with your new display name. (Max 15 chars)", 
+                             reply_markup={"force_reply": True})
+                             
+            elif callback_data == "settings:token":
+                # Prompt for token
+                delete_message(chat_id, message_id)
+                send_message(chat_id, "Please reply to this message with your new Toggl API Token. You can find it in your Toggl Profile Settings.", 
+                             reply_markup={"force_reply": True})
+
             return jsonify({"status": "ok"})
 
         # Handle Text Messages
@@ -303,14 +325,23 @@ def telegram_webhook(request):
                 text = data["message"]["text"].strip()
                 print(f"Received message: {text}")
                 
-                # Check for Reply to Wake Message
+                # Check for Reply
                 reply_to = data["message"].get("reply_to_message")
                 if reply_to:
                     reply_msg_id = reply_to["message_id"]
-                    sender_name = data["message"].get("from", {}).get("first_name", "Unknown")
+                    reply_to_text = reply_to.get("text", "")
+                    sender_name_tele = data["message"].get("from", {}).get("first_name", "Unknown")
                     
-                    # Try to handle as wake reply
-                    if handle_wake_reply(supabase, reply_msg_id, text, sender_name):
+                    # 1. Handle Settings/Registration Replies
+                    if "display name" in reply_to_text:
+                        handle_name_update(chat_id, sender_id, text, incoming_message_id)
+                        return jsonify({"status": "ok"})
+                    elif "Toggl API Token" in reply_to_text:
+                        handle_token_update(chat_id, sender_id, text, incoming_message_id)
+                        return jsonify({"status": "ok"})
+
+                    # 2. Try to handle as wake reply
+                    if handle_wake_reply(supabase, reply_msg_id, text, sender_name_tele):
                         send_message(chat_id, "✅ Wake reply forwarded successfully!", reply_to_message_id=incoming_message_id)
                         return jsonify({"status": "ok"}) # Handled, exit
                 
@@ -365,6 +396,12 @@ def telegram_webhook(request):
                         except Exception as e:
                             print(f"Supabase error: {e}")
                             send_message(chat_id, f"Failed to fetch users: {str(e)}", reply_to_message_id=incoming_message_id)
+
+                elif command == "/settings":
+                    if not supabase:
+                        send_message(chat_id, "Error: Supabase not configured.", reply_to_message_id=incoming_message_id)
+                    else:
+                        handle_settings_request(chat_id, sender_id, incoming_message_id)
 
                 elif command == "/status":
                     # ... (existing /status logic) ...
@@ -676,6 +713,13 @@ def handle_leaderboard_request(chat_id, period, target_date_str, message_id, is_
         # Generate Report
         report = get_leaderboard_report(users, period=period, target_date_str=target_date_str, timezone_str='Asia/Kolkata')
         
+        # Trigger Sync for all users (in background-ish, one by one)
+        # Only if not a fully cached report (though leaderboard is mix, we sync always to be sure)
+        for user in users:
+             api = user.get('toggl_token')
+             if api:
+                 sync_user_data(supabase, user.get('id'), api)
+
         # Generate Navigation Keyboard
         keyboard = get_leaderboard_keyboard(period, target_date_str)
         
@@ -697,6 +741,90 @@ def handle_leaderboard_request(chat_id, period, target_date_str, message_id, is_
 
 # Helper Functions for Logic (Moved out of webhook for cleaner reuse)
 
+def handle_settings_request(chat_id, sender_id, incoming_message_id):
+    """Entry point for /settings."""
+    try:
+        response = supabase.table('Users').select("*").eq('tele_id', str(sender_id)).execute()
+        user = response.data[0] if response.data else None
+        
+        if not user:
+            # User not found, show registration
+            text = "👋 *It looks like you're not registered!* \n\nRegister now to link your Toggl account and appear on the leaderboard."
+            keyboard = {
+                "inline_keyboard": [[{"text": "Register (New Profile) ✨", "callback_data": "reg:new"}]]
+            }
+            send_message(chat_id, text, reply_to_message_id=incoming_message_id, reply_markup=keyboard)
+        else:
+            name = user.get('user_name', 'Unknown').capitalize()
+            text = f"⚙️ *Settings for {name}*\n\nYour current Toggl token is configured.\nWhat would you like to update?"
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "Change Name ✏️", "callback_data": "settings:name"}],
+                    [{"text": "Change Toggl Token 🔑", "callback_data": "settings:token"}]
+                ]
+            }
+            send_message(chat_id, text, reply_to_message_id=incoming_message_id, reply_markup=keyboard)
+            
+    except Exception as e:
+        print(f"Settings Request Error: {e}")
+        send_message(chat_id, "Error accessing settings.")
+
+def handle_name_update(chat_id, sender_id, new_name, reply_to_id):
+    """Updates the user name in the database or creates a new profile."""
+    if len(new_name) > 15:
+        send_message(chat_id, "❌ Name too long. Max 15 characters.", reply_to_message_id=reply_to_id)
+        return
+
+    try:
+        # 1. Try to find user by tele_id
+        res_tele = supabase.table('Users').select("*").eq('tele_id', str(sender_id)).execute()
+        user_by_tele = res_tele.data[0] if res_tele.data else None
+        
+        if user_by_tele:
+            # User exists with this Telegram ID - just update their name
+            supabase.table('Users').update({'user_name': new_name}).eq('tele_id', str(sender_id)).execute()
+            send_message(chat_id, f"✅ Display name updated to *{new_name}*.", reply_to_message_id=reply_to_id)
+            return
+
+        # 2. If not found by tele_id, check if a user with this name already exists (migration/manual entry case)
+        res_name = supabase.table('Users').select("*").ilike('user_name', new_name).execute()
+        user_by_name = res_name.data[0] if res_name.data else None
+        
+        if user_by_name:
+            # User exists by name but has no tele_id (or a different one)
+            # Link this Telegram ID to the existing profile
+            supabase.table('Users').update({'tele_id': str(sender_id)}).eq('id', user_by_name['id']).execute()
+            send_message(chat_id, f"✅ Welcome back, *{new_name}*! Your Telegram account has been linked to your profile.", reply_to_message_id=reply_to_id)
+        else:
+            # 3. Truly new user - Create entry
+            supabase.table('Users').insert({'tele_id': str(sender_id), 'user_name': new_name}).execute()
+            send_message(chat_id, f"✅ Profile created with name *{new_name}*.\n\n*Next Step:* Please provide your Toggl API Token to link your account.", 
+                         reply_markup={"force_reply": True})
+
+    except Exception as e:
+        print(f"Name Update Error: {e}")
+        send_message(chat_id, "❌ Failed to update name.", reply_to_message_id=reply_to_id)
+
+def handle_token_update(chat_id, sender_id, new_token, reply_to_id):
+    """Updates the Toggl token in the database."""
+    try:
+        # Check if user exists
+        res = supabase.table('Users').select("*").eq('tele_id', str(sender_id)).execute()
+        user = res.data[0] if res.data else None
+        
+        if not user:
+             send_message(chat_id, "❌ Profile not found. Please set your display name first using /settings.", reply_to_message_id=reply_to_id)
+             return
+             
+        # Optional: Validate token with Toggl?
+        # For now, just save it.
+        supabase.table('Users').update({'toggl_token': new_token}).eq('tele_id', str(sender_id)).execute()
+        send_message(chat_id, "✅ Toggl API Token updated successfully! You're all set.", reply_to_message_id=reply_to_id)
+
+    except Exception as e:
+        print(f"Token Update Error: {e}")
+        send_message(chat_id, "❌ Failed to update token.", reply_to_message_id=reply_to_id)
+
 def handle_status_request(chat_id, target_name, sender_id, loading_msg_id):
     try:
         response = supabase.table('Users').select("*").execute()
@@ -716,17 +844,22 @@ def handle_status_request(chat_id, target_name, sender_id, loading_msg_id):
                     if toggl_token:
                         status_str = get_user_status_string(user_name.capitalize(), toggl_token)
                         status_messages.append(status_str)
+                        # Sync in background
+                        sync_user_data(supabase, user.get('id'), toggl_token)
         else:
              # Find specific
             found = False
             for user in users:
                 if user.get('user_name', '').lower() == target_name:
                     found = True
+                    user_id_db = user.get('id')
                     user_name = user.get('user_name', 'Unknown')
                     toggl_token = user.get('toggl_token')
                     if toggl_token:
                         status_str = get_user_status_string(user_name.capitalize(), toggl_token)
                         status_messages.append(status_str)
+                        # Sync in background
+                        sync_user_data(supabase, user_id_db, toggl_token)
                     else:
                         status_messages.append(f"⚠️ {user_name.capitalize()} has no Toggl token configured.")
                     break
@@ -766,17 +899,19 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
             for user in users:
                 api = user.get('toggl_token')
                 name = user.get('user_name', 'User').capitalize()
+                cached = user.get('user_data')
                 if api:
-                    # Respect detailed, pass target date
-                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str)
+                    rep = get_daily_report(name, api, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str, cached_entries=cached)
                     reports.append(rep)
+                    
+                    # Sync if not a cached result
+                    if "Cached Data" not in rep:
+                        sync_user_data(supabase, user.get('id'), api)
             
             final_report = ("\n" + "-"*10 + "\n").join(reports)
             if not reports:
                 final_report = "No users to report."
             
-            # No toggle button for "All" view to keep it simple? Or add one?
-            # Let's add one if single user, maybe skip for all?
             keyboard = None 
             
         else:
@@ -792,11 +927,17 @@ def handle_today_request(chat_id, target_name, detailed, sender_id, message_id, 
             else:
                 api_token = target_user.get('toggl_token')
                 user_name = target_user.get('user_name', 'User').capitalize()
+                cached = target_user.get('user_data')
                 if not api_token:
                     final_report = f"⚠️ {user_name} has no Toggl token."
                     keyboard = None
                 else:
-                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str)
+                    final_report = get_daily_report(user_name, api_token, timezone_str='Asia/Kolkata', detailed=detailed, target_date_str=target_date_str, cached_entries=cached)
+                    
+                    # Sync after success (if not using cache)
+                    if "Cached Data" not in final_report:
+                        sync_user_data(supabase, target_user.get('id'), api_token)
+
                     # Add Toggle Button
                     current_view = "detailed" if detailed else "normal"
                     keyboard = get_report_keyboard(user_name, current_view, target_date_str)
